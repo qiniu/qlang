@@ -17,12 +17,12 @@
 package cl
 
 import (
-	"reflect"
 	"strings"
 
 	"github.com/goplus/gop/ast"
 	"github.com/goplus/gop/ast/astutil"
 	"github.com/goplus/gop/exec.spec"
+	"github.com/goplus/gop/reflect"
 	"github.com/goplus/gop/token"
 	"github.com/qiniu/x/ctype"
 	"github.com/qiniu/x/errors"
@@ -560,7 +560,7 @@ func compileUnaryExpr(ctx *blockCtx, v *ast.UnaryExpr) func() {
 		}
 		if v.Op == token.AND {
 			vx := x.(iValue)
-			t := reflect.TypeOf(reflect.New(vx.Type()).Interface())
+			t := reflect.PtrTo(vx.Type())
 			ret := &goValue{t: t}
 			ctx.infer.Ret(1, ret)
 			return func() {
@@ -840,7 +840,7 @@ func compileIndexExprLHS(ctx *blockCtx, v *ast.IndexExpr, mode compileMode) {
 	}
 	if cons, ok := val.(*constVal); ok {
 		cons.bound(typElem, ctx.out)
-	} else if t := val.(iValue).Type(); t != typElem && typElem.Kind() != reflect.Interface {
+	} else if t := val.(iValue).Type(); !reflect.EqualType(t, typElem) && typElem.Kind() != reflect.Interface {
 		log.Panicf("compileIndexExprLHS: can't assign `%v`[i] = `%v`\n", typ, t)
 	}
 	exprIdx := compileExpr(ctx, v.Index)
