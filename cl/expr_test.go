@@ -1772,10 +1772,132 @@ var testStarExprClauses = map[string]testData{
 					println(a1, *c.b, *c.m["foo"], *c.s[0])
 	
 						`, "3 3 8 11\n", false},
-	"start expr ptr conv": {`
+	"star expr ptr conv": {`
 					a := 10
 					println(*(*int)(&a))
 					`, "10\n", false},
+	"star expr ptr set": {`
+					a := 10
+					p := &a
+					*p = 20
+					println(a)
+					*(p) = 30
+					println(a)
+					*(&a) = 40
+					println(a)
+	`, "20\n30\n40\n", false},
+	"star expr call set": {`
+					func test(v *int) *int {
+						return v
+					}
+					v := 100
+					*test(&v) = 200
+					println(v)
+					*((*int)(&v)) = 300
+					println(v)
+	`, "200\n300\n", false},
+	"star expr multi indirect": {`
+					v := 10
+					p := &v
+					p1 := &p
+					p2 := &p1
+					***p2 = 30
+					println(v)
+	`, "30\n", false},
+	"star expr multi indirect call": {`
+					func test(v **int) **int {
+						return v
+					}
+					v := 10
+					p := &v
+					p1 := &p
+					**test(p1) = 30
+					println(v)
+	`, "30\n", false},
+	"star selection expr multi indirect": {`
+					type Point struct {
+						X **int
+						Y int
+					}
+					v := 10
+					p1 := &v
+					p2 := &p1
+					pt := &Point{}
+					pt.X = p2
+					**pt.X = 30
+					println(**pt.X)
+	`, "30\n", false},
+	"star stack var multi indirect": {`
+					func test(v ***int) {
+						***v = 30
+						println(***v)
+					}
+					v := 10
+					p1 := &v
+					p2 := &p1
+					test(&p2)
+					println(v)
+	`, "30\n30\n", false},
+	"star slice multi indirect": {`
+					var v1, v2 int
+					p1 := &v1
+					p2 := &v2
+					p3 := &p1
+					p4 := &p2
+					v := []***int{&p3, &p4}
+					index := 1
+					***v[0] = 30
+					***v[index] = 40
+					println(***v[0])
+					println(***v[index])
+	`, "30\n40\n", false},
+	"star array multi indirect": {`
+					var v1, v2 int
+					p1 := &v1
+					p2 := &v2
+					p3 := &p1
+					p4 := &p2
+					v := [2]***int{&p3, &p4}
+					index := 1
+					***v[0] = 30
+					***v[index] = 40
+					println(***v[0])
+					println(***v[index])
+	`, "30\n40\n", false},
+	"star map multi indirect": {`
+					var v int
+					p1 := &v
+					p2 := &p1
+					m := make(map[int]***int)
+					m[0] = &p2
+					***m[0] = 30
+					println(***m[0])
+	`, "30\n", false},
+	"star inc dec multi indirect": {`
+					v := 30
+					p1 := &v
+					p2 := &p1
+					p3 := &p2
+					v++
+					**p2++
+					***p3++
+					println(v)
+					***p3--
+					println(v)
+	`, "33\n32\n", false},
+	"star big.Int inc dec multi indirect": {`
+					v := 1r
+					p := &v
+					p1 := &p
+					v++
+					println(v)
+					*p++
+					println(v)
+					**p1++
+					println(v)
+					**p1--
+					println(v)
+	`, "2\n3\n4\n3\n", false},
 }
 
 func TestStarExpr(t *testing.T) {

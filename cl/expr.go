@@ -51,9 +51,39 @@ func compileExprLHS(ctx *blockCtx, expr ast.Expr, mode compileMode) {
 		compileSelectorExprLHS(ctx, v, mode)
 	case *ast.StarExpr:
 		compileStarExprLHS(ctx, v, mode)
+	case *ast.ParenExpr:
+		compileExprLHS(ctx, v.X, mode)
+	case *ast.UnaryExpr:
+		compileUnaryExprLHS(ctx, v, mode)
+	case *ast.CallExpr:
+		compileCallExprLHS(ctx, v, mode)
 	default:
-		log.Panicln("compileExpr failed: unknown -", reflect.TypeOf(v))
+		log.Panicln("compileExprLHS failed: unknown -", reflect.TypeOf(v))
 	}
+}
+
+func compileUnaryExprLHS(ctx *blockCtx, v *ast.UnaryExpr, mode token.Token) {
+	ctx.indirect--
+	compileExprLHS(ctx, v.X, mode)
+}
+
+func compileCallExprLHS(ctx *blockCtx, v *ast.CallExpr, mode token.Token) {
+	compileCallExpr(ctx, v, callExpr)()
+	rv := ctx.infer.Get(-1)
+	lv := ctx.infer.Get(-2)
+	rt := boundType(rv.(iValue))
+	typ := rt
+	for i := 0; i < ctx.indirect; i++ {
+		typ = typ.Elem()
+	}
+	checkType(typ, lv, ctx.out)
+	ctx.infer.PopN(2)
+	elem := rt
+	for i := 0; i < ctx.indirect-1; i++ {
+		elem = elem.Elem()
+		ctx.out.AddrOp(kindOf(elem), exec.OpAddrVal)
+	}
+	ctx.out.AddrOp(kindOf(typ), exec.OpAssign)
 }
 
 func compileExpr(ctx *blockCtx, expr ast.Expr) func() {
@@ -132,19 +162,43 @@ func compileIdentLHS(ctx *blockCtx, name string, mode compileMode) {
 		}
 	}
 
-	typ := addr.getType()
-	if ctx.indirect {
+	addrTyp := addr.getType()
+	typ := addrTyp
+	for i := 0; i < ctx.indirect; i++ {
 		typ = typ.Elem()
 	}
 	checkType(typ, in, ctx.out)
 	ctx.infer.PopN(1)
 	if v, ok := addr.(*execVar); ok {
 		if mode == token.ASSIGN || mode == token.DEFINE {
-			ctx.out.StoreVar(v.v)
+			if ctx.indirect > 0 {
+				ctx.out.LoadVar(v.v)
+				elem := addrTyp
+				for i := 0; i < ctx.indirect-1; i++ {
+					elem = elem.Elem()
+					ctx.out.AddrOp(kindOf(elem), exec.OpAddrVal)
+				}
+				ctx.out.AddrOp(kindOf(typ), exec.OpAssign)
+			} else {
+				ctx.out.StoreVar(v.v)
+			}
 		} else if op, ok := addrops[mode]; ok {
-			typ := v.v.Type()
 			if typ.Kind() == reflect.Ptr {
-				ctx.out.LoadVar(v.v).AddrOp(kindOf(typ), op)
+				ctx.out.LoadVar(v.v)
+				elem := addrTyp
+				for i := 0; i < ctx.indirect; i++ {
+					elem = elem.Elem()
+					ctx.out.AddrOp(kindOf(elem), exec.OpAddrVal)
+				}
+				ctx.out.AddrOp(kindOf(typ), op)
+			} else if ctx.indirect > 0 {
+				ctx.out.LoadVar(v.v)
+				elem := addrTyp
+				for i := 0; i < ctx.indirect-1; i++ {
+					elem = elem.Elem()
+					ctx.out.AddrOp(kindOf(elem), exec.OpAddrVal)
+				}
+				ctx.out.AddrOp(kindOf(typ), op)
 			} else {
 				ctx.out.AddrVar(v.v).AddrOp(kindOf(typ), op)
 			}
@@ -153,8 +207,13 @@ func compileIdentLHS(ctx *blockCtx, name string, mode compileMode) {
 		}
 	} else {
 		if mode == token.ASSIGN || mode == token.DEFINE {
-			if ctx.indirect {
-				ctx.out.Load(addr.(*stackVar).index).AddrOp(kindOf(addr.(*stackVar).getType()), exec.OpAssign)
+			if ctx.indirect > 0 {
+				ctx.out.Load(addr.(*stackVar).index)
+				for i := 0; i < ctx.indirect-1; i++ {
+					typ = reflect.PtrTo(typ)
+					ctx.out.AddrOp(kindOf(typ), exec.OpAddrVal)
+				}
+				ctx.out.AddrOp(kindOf(addrTyp), exec.OpAssign)
 			} else {
 				ctx.out.Store(addr.(*stackVar).index)
 			}
@@ -964,7 +1023,8 @@ func compileIndexExprLHS(ctx *blockCtx, v *ast.IndexExpr, mode compileMode) {
 	}
 	exprX()
 	ctx.checkLoadAddr = false
-	if ctx.indirect {
+	styp := typElem
+	for i := 0; i < ctx.indirect; i++ {
 		typElem = typElem.Elem()
 	}
 	if cons, ok := val.(*constVal); ok {
@@ -980,8 +1040,14 @@ func compileIndexExprLHS(ctx *blockCtx, v *ast.IndexExpr, mode compileMode) {
 	case reflect.Slice, reflect.Array:
 		if cons, ok := i.(*constVal); ok {
 			n := boundConst(cons.v, exec.TyInt)
-			if ctx.indirect {
-				ctx.out.Index(n.(int)).AddrOp(kindOf(typElem), exec.OpAssign)
+			if ctx.indirect > 0 {
+				ctx.out.Index(n.(int))
+				elem := styp
+				for i := 0; i < ctx.indirect-1; i++ {
+					elem = elem.Elem()
+					ctx.out.AddrOp(kindOf(elem), exec.OpAddrVal)
+				}
+				ctx.out.AddrOp(kindOf(typElem), exec.OpAssign)
 			} else {
 				ctx.out.SetIndex(n.(int))
 			}
@@ -995,8 +1061,14 @@ func compileIndexExprLHS(ctx *blockCtx, v *ast.IndexExpr, mode compileMode) {
 				log.Panicln("compileIndexExprLHS: index expression value type is invalid")
 			}
 		}
-		if ctx.indirect {
-			ctx.out.Index(-1).AddrOp(kindOf(typElem), exec.OpAssign)
+		if ctx.indirect > 0 {
+			ctx.out.Index(-1)
+			elem := styp
+			for i := 0; i < ctx.indirect-1; i++ {
+				elem = elem.Elem()
+				ctx.out.AddrOp(kindOf(elem), exec.OpAddrVal)
+			}
+			ctx.out.AddrOp(kindOf(typElem), exec.OpAssign)
 		} else {
 			ctx.out.SetIndex(-1)
 		}
@@ -1009,8 +1081,14 @@ func compileIndexExprLHS(ctx *blockCtx, v *ast.IndexExpr, mode compileMode) {
 		if t := i.(iValue).Type(); t != typIdx {
 			logIllTypeMapIndexPanic(ctx, v, t, typIdx)
 		}
-		if ctx.indirect {
-			ctx.out.MapIndex(false).AddrOp(kindOf(typElem), exec.OpAssign)
+		if ctx.indirect > 0 {
+			ctx.out.MapIndex(false)
+			elem := styp
+			for i := 0; i < ctx.indirect-1; i++ {
+				elem = elem.Elem()
+				ctx.out.AddrOp(kindOf(elem), exec.OpAddrVal)
+			}
+			ctx.out.AddrOp(kindOf(typElem), exec.OpAssign)
 		} else {
 			ctx.out.SetMapIndex()
 		}
@@ -1244,7 +1322,7 @@ func compileSelectorExprLHS(ctx *blockCtx, v *ast.SelectorExpr, mode compileMode
 			if t.Kind() == reflect.Struct {
 				if sf, ok := t.FieldByName(name); ok {
 					typ := sf.Type
-					if ctx.indirect {
+					for i := 0; i < ctx.indirect; i++ {
 						typ = typ.Elem()
 					}
 					checkType(typ, in, ctx.out)
@@ -1260,8 +1338,14 @@ func compileSelectorExprLHS(ctx *blockCtx, v *ast.SelectorExpr, mode compileMode
 						exprX()
 					}
 					ctx.checkLoadAddr = false
-					if ctx.indirect {
-						ctx.out.LoadField(fieldStructType, fieldIndex).AddrOp(kindOf(typ), exec.OpAssign)
+					if ctx.indirect > 0 {
+						ctx.out.LoadField(fieldStructType, fieldIndex)
+						elem := sf.Type
+						for i := 0; i < ctx.indirect-1; i++ {
+							elem = elem.Elem()
+							ctx.out.AddrOp(kindOf(elem), exec.OpAddrVal)
+						}
+						ctx.out.AddrOp(kindOf(typ), exec.OpAssign)
 					} else {
 						ctx.out.StoreField(fieldStructType, fieldIndex)
 					}
@@ -1277,9 +1361,9 @@ func compileSelectorExprLHS(ctx *blockCtx, v *ast.SelectorExpr, mode compileMode
 }
 
 func compileStarExprLHS(ctx *blockCtx, v *ast.StarExpr, mode compileMode) {
-	ctx.indirect = true
+	ctx.indirect++
 	compileExprLHS(ctx, v.X, mode)
-	ctx.indirect = false
+	ctx.indirect--
 }
 
 func funcToClosure(ctx *blockCtx, fun ast.Expr, ftyp *ast.FuncType) *funcDecl {
