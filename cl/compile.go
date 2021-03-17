@@ -29,6 +29,7 @@ import (
 	"github.com/goplus/gop/ast/astutil"
 	"github.com/goplus/gop/exec.spec"
 	"github.com/goplus/gop/token"
+	"github.com/goplus/reflectx"
 	"github.com/qiniu/x/log"
 )
 
@@ -304,14 +305,13 @@ func loadType(ctx *blockCtx, spec *ast.TypeSpec) {
 		log.Panicln("loadType failed: symbol exists -", spec.Name.Name)
 	}
 	t := toType(ctx, spec.Type).(reflect.Type)
-
-	ctx.out.DefineType(t, spec.Name.Name)
-
+	typ := reflectx.NamedTypeOf(ctx.pkg.Name, spec.Name.Name, t)
+	ctx.out.DefineType(typ, spec.Name.Name)
 	tDecl := &typeDecl{
-		Type: t,
+		Type: typ,
 	}
 	ctx.syms[spec.Name.Name] = tDecl
-	ctx.types[t] = tDecl
+	ctx.types[typ] = tDecl
 }
 
 var (

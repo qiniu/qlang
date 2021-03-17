@@ -21,6 +21,7 @@ import (
 	"go/token"
 	"reflect"
 
+	"github.com/goplus/reflectx"
 	"github.com/qiniu/x/log"
 )
 
@@ -155,6 +156,9 @@ func Type(p *Builder, typ reflect.Type, actualTypes ...bool) ast.Expr {
 		if gtype, ok := p.types[typ]; ok {
 			return Ident(gtype.Name())
 		}
+	}
+	if named, ok := reflectx.ToNamed(typ); ok && named.Kind == reflectx.TkType {
+		return Type(p, named.From)
 	}
 	pkgPath, name := typ.PkgPath(), typ.Name()
 	if typ.String() == "unsafe.Pointer" {

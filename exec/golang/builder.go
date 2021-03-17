@@ -145,11 +145,11 @@ var (
 // Resolve resolves all unresolved labels/functions/consts/etc.
 func (p *Builder) Resolve() *Code {
 	decls := make([]ast.Decl, 0, 8)
+	types := p.resolveTypes()
 	imports := p.resolveImports()
 	if imports != nil {
 		decls = append(decls, imports)
 	}
-	types := p.resolveTypes()
 	if types != nil {
 		decls = append(decls, types)
 	}
@@ -220,10 +220,6 @@ func (p *Builder) resolveTypes() *ast.GenDecl {
 	specs := make([]ast.Spec, 0, n)
 	for _, t := range p.types {
 		typ := t.Type()
-		if typ.Kind() == reflect.Ptr {
-			typ = typ.Elem()
-		}
-
 		spec := &ast.TypeSpec{
 			Name: Ident(t.Name()),
 			Type: Type(p, typ, true),

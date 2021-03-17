@@ -400,6 +400,49 @@ func TestTypeCast(t *testing.T) {
 	`).Equal([]byte("hello"))
 }
 
+func TestTypeCast2(t *testing.T) {
+	cltest.Expect(t, `
+	type M int
+	func (m M) Foo() {
+		println("foo",m)
+	}
+	m := M(10)
+	m.Foo()
+	`, "foo 10\n")
+	cltest.Expect(t, `
+	type Point struct {
+	}
+	type M int
+	func (m M) Foo() {
+		println("foo",m)
+	}
+	m := M(&Point{})
+	`, "", nil)
+}
+
+func TestDiffrentType(t *testing.T) {
+	cltest.Expect(t, `
+	type Pt1 struct {
+		X int
+		Y int
+	}
+	func (p *Pt1) Test() {
+		println("pt1", p)
+	}
+	type Pt2 struct {
+		X int
+		Y int
+	}
+	func (p *Pt2) Test() {
+		println("pt2",p)
+	}
+	pt1 := Pt1{10,20}
+	pt2 := Pt2{1,2}
+	pt1.Test()
+	pt2.Test()
+	`, "pt1 &{10 20}\npt2 &{1 2}\n")
+}
+
 func TestPkgTypeConv(t *testing.T) {
 	cltest.Expect(t, `
 	import "sort"
@@ -1446,21 +1489,138 @@ var testMethodClauses = map[string]testData{
 					p.SetName("foo",31)
 					`, "foo\n31\n", false},
 	"method int type": {`
-					
 					type M int
-
 					func (m M) Foo() {
 						println("foo", m)
 					}
-
 					m := M(0)
 					m.Foo()
 					println(m)
 					`, "foo 0\n0\n", false},
+	"method two int type": {`
+					type M int
+					type M2 int
+					func (m M) Foo() {
+						println("foo", m)
+					}
+					func (m M2) Foo() {
+						println("foo2", m)
+					}
+					m := M(0)
+					m.Foo()
+					m2 := M2(1)
+					m2.Foo()
+					println(m)
+					println(m2)
+					`, "foo 0\nfoo2 1\n0\n1\n", false},
+	"method int type conv": {`
+					type M int
+					type M2 int
+					func (m M) Foo() {
+						println("foo", m)
+					}
+					func (m M2) Foo() {
+						println("foo2", m)
+					}
+					M(10).Foo()
+					M2(11).Foo()
+					`, "foo 10\nfoo2 11\n", false},
+	"method two struct type": {`
+					type Pt1 struct {
+						X int
+						Y int
+					}
+					func (p *Pt1) Test() {
+						println("pt1", p)
+					}
+					type Pt2 struct {
+						X int
+						Y int
+					}
+					func (p *Pt2) Test() {
+						println("pt2",p)
+					}
+					pt1 := Pt1{1,2}
+					pt2 := Pt2{3,4}
+					pt1.Test()
+					pt2.Test()
+					`, "pt1 &{1 2}\npt2 &{3 4}\n", false},
+	"method struct field type": {`
+					type M int
+					func (m M) Foo() {
+						println("foo", m)
+					}
+					type Pt struct {
+						X M
+						Y M
+					}
+					type Pt2 Pt
+					pt := &Pt{10,20}
+					pt.Y.Foo()
+					pt2 := &Pt2{30,40}
+					pt2.Y.Foo()
+					M(11).Foo()
+				`, "foo 20\nfoo 40\nfoo 11\n", false},
+	"method two [5]byte type": {`
+					type T1 [5]byte
+					type T2 [5]byte
+					func (t T1) Test() { println(t) }
+					func (t T2) Test() { println(t) }
+					var t1 T1
+					var t2 T2
+					t1 = T1{'h','e','l','l','o'}
+					t2 = T2{'w','o','r','l','d'}
+					t1.Test()
+					t2.Test()
+					`, "[104 101 108 108 111]\n[119 111 114 108 100]\n", false},
+	"method two []byte type": {`
+					type TByte []byte
+					type TByte2 []byte
+					func (t TByte) Test() { println(string(t)) }
+					func (t TByte2) Test() { println(string(t)) }
+					TByte("byte1").Test()
+					TByte2("byte2").Test()
+					`, "byte1\nbyte2\n", false},
+	"method two []string type": {`
+					type T1 []string
+					type T2 []string
+					func (t T1) Test() { println(t) }
+					func (t T2) Test() { println(t) }
+					var t1 T1
+					var t2 T2
+					t1 = append(t1,"hello")
+					t2 = append(t2,"world")
+					t1.Test()
+					t2.Test()
+					`, "[hello]\n[world]\n", false},
+	"method two map[int]string type": {`
+					type T1 map[int]string
+					type T2 map[int]string
+					func (t T1) Test() { println(t) }
+					func (t T2) Test() { println(t) }
+					t1 := make(T1)
+					t2 := make(T2)
+					t1[10] = "hello"
+					t2[20] = "world"
+					t1.Test()
+					t2.Test()
+					`, "map[10:hello]\nmap[20:world]\n", false},
 }
 
 func TestMethodCases(t *testing.T) {
 	testScripts(t, "TestMethod", testMethodClauses)
+}
+
+func TestBadType(t *testing.T) {
+	cltest.Expect(t, `
+	type M int
+	type M int
+	println(M(10))
+	`, "", nil)
+	cltest.Expect(t, `
+	type M2 M
+	println(M2(10))
+	`, "", nil)
 }
 
 func TestEmbeddedField(t *testing.T) {
@@ -1699,58 +1859,20 @@ var testStarExprClauses = map[string]testData{
 				*c.s[0] = 10
 				*c.s[0+0] = 10
 				println(a1, *c.b, *c.m["foo"], *c.s[0], *c.s[0+0])
-
 					`, "3 3 8 10 10\n", false},
 	"star expr exec": {`
-					func A(a *int, c *struct {
-						b *int
-						m map[string]*int
-						s []*int
-					}) {
-						*a = 5
-						*c.b = 3
-						*c.m["foo"] = 7
-						*c.s[0] = 9
-					}
-	
-					func main() {
-						a1 := 6
-						a2 := 6
-						a3 := 6
-						c := struct {
-							b *int
-							m map[string]*int
-							s []*int
-						}{
-							b: &a1,
-							m: map[string]*int{
-								"foo": &a2,
-							},
-							s: []*int{&a3},
-						}
-						A(&a1, &c)
-						*c.m["foo"] = 8
-						*c.s[0] = 10
-						*c.s[0+0] = 10
-						println(a1, *c.b, *c.m["foo"], *c.s[0], *c.s[0+0])
-					}
-						`, "3 3 8 10 10\n", false},
-	"star expr lhs slice index func": {`
-					func A(a *int, c *struct {
-						b *int
-						m map[string]*int
-						s []*int
-					}) {
-						*a = 5
-						*c.b = 3
-						*c.m["foo"] = 7
-						*c.s[0] = 9
-					}
-					
-					func Index() int {
-						return 0
-					}
-					
+				func A(a *int, c *struct {
+					b *int
+					m map[string]*int
+					s []*int
+				}) {
+					*a = 5
+					*c.b = 3
+					*c.m["foo"] = 7
+					*c.s[0] = 9
+				}
+
+				func main() {
 					a1 := 6
 					a2 := 6
 					a3 := 6
@@ -1768,10 +1890,43 @@ var testStarExprClauses = map[string]testData{
 					A(&a1, &c)
 					*c.m["foo"] = 8
 					*c.s[0] = 10
-					*c.s[Index()] = 11
-					println(a1, *c.b, *c.m["foo"], *c.s[0])
-	
-						`, "3 3 8 11\n", false},
+					println(a1, *c.b, *c.m["foo"], *c.s[0], *c.s[0+0])
+				}
+				`, "3 3 8 10 10\n", false},
+	"star expr lhs slice index func": {`
+				func A(a *int, c *struct {
+					b *int
+					m map[string]*int
+					s []*int
+				}) {
+					*a = 5
+					*c.b = 3
+					*c.m["foo"] = 7
+					*c.s[0] = 9
+				}
+				func Index() int {
+					return 0
+				}
+				a1 := 6
+				a2 := 6
+				a3 := 6
+				c := struct {
+					b *int
+					m map[string]*int
+					s []*int
+				}{
+					b: &a1,
+					m: map[string]*int{
+						"foo": &a2,
+					},
+					s: []*int{&a3},
+				}
+				A(&a1, &c)
+				*c.m["foo"] = 8
+				*c.s[0] = 10
+				*c.s[Index()] = 11
+				println(a1, *c.b, *c.m["foo"], *c.s[0])
+				`, "3 3 8 11\n", false},
 	"start expr ptr conv": {`
 					a := 10
 					println(*(*int)(&a))
