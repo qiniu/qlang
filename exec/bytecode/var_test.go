@@ -17,6 +17,7 @@
 package bytecode
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -179,6 +180,133 @@ func TestContext_CloneSetVarScope(t *testing.T) {
 	ctx.CloneSetVarScope(ctxNew)
 	if ctxNew.GetVar(y) != ctx.GetVar(y) {
 		t.Fatal("clone set var scop err")
+	}
+}
+
+func TestContext_CloneSetVarScope2(t *testing.T) {
+	var m func()
+	x := NewVar(TyString, "x")
+	foo := newFunc("", 1)
+	ret := NewVar(TyString, "ret")
+	fn := NewVar(reflect.TypeOf(m), "foo")
+	code := newBuilder().
+		DefineVar(ret).
+		DefineVar(x).
+		DefineVar(fn).
+		Push("001").
+		StoreVar(x).
+		GoClosure(foo).
+		StoreVar(fn).
+		LoadVar(fn).
+		CallGoClosure(0, 0, false).
+		Return(-1).
+		DefineFunc(foo.Args()).
+		LoadVar(x).
+		StoreVar(ret).
+		EndFunc(foo).
+		Resolve()
+
+	setPackage(foo, code)
+
+	ctx := NewContext(code)
+	ip := ctx.Exec(0, code.Len())
+
+	x2 := NewVar(TyString, "x")
+	ret2 := NewVar(TyString, "ret")
+	fn2 := NewVar(reflect.TypeOf(m), "foo")
+
+	code2 := newBuilder().
+		DefineVar(ret2).
+		DefineVar(x2).
+		DefineVar(fn2).
+		Push("001").
+		StoreVar(x).
+		GoClosure(foo).
+		StoreVar(fn2).
+		LoadVar(fn2).
+		CallGoClosure(0, 0, false).
+		Push("002").
+		StoreVar(x).
+		LoadVar(fn2).
+		CallGoClosure(0, 0, false).
+		Return(-1).
+		DefineFunc(foo.Args()).
+		LoadVar(x).
+		StoreVar(ret).
+		EndFunc(foo).
+		Resolve()
+
+	setPackage(foo, code2)
+
+	ctxNew := NewContext(code2)
+	ctx.CloneSetVarScope(ctxNew)
+	ctxNew.Exec(ip-1, code2.Len())
+
+	if v := ctxNew.GetVar(ret2); v != "002" {
+		t.Fatal("clone set var scop closure err", v)
+	}
+}
+
+func TestContext_UpdateCode(t *testing.T) {
+	var m func()
+	x := NewVar(TyString, "x")
+	foo := newFunc("", 1)
+	ret := NewVar(TyString, "ret")
+	fn := NewVar(reflect.TypeOf(m), "foo")
+	code := newBuilder().
+		DefineVar(ret).
+		DefineVar(x).
+		DefineVar(fn).
+		Push("001").
+		StoreVar(x).
+		GoClosure(foo).
+		StoreVar(fn).
+		LoadVar(fn).
+		CallGoClosure(0, 0, false).
+		Return(-1).
+		DefineFunc(foo.Args()).
+		LoadVar(x).
+		StoreVar(ret).
+		EndFunc(foo).
+		Resolve()
+
+	setPackage(foo, code)
+
+	ctx := NewContext(code)
+	ip := ctx.Exec(0, code.Len())
+
+	x2 := NewVar(TyString, "x")
+	ret2 := NewVar(TyString, "ret")
+	fn2 := NewVar(reflect.TypeOf(m), "foo")
+
+	code2 := newBuilder().
+		DefineVar(ret2).
+		DefineVar(x2).
+		DefineVar(fn2).
+		Push("001").
+		StoreVar(x).
+		GoClosure(foo).
+		StoreVar(fn2).
+		LoadVar(fn2).
+		CallGoClosure(0, 0, false).
+		Push("002").
+		StoreVar(x).
+		LoadVar(fn2).
+		CallGoClosure(0, 0, false).
+		Return(-1).
+		DefineFunc(foo.Args()).
+		LoadVar(x).
+		StoreVar(ret).
+		EndFunc(foo).
+		Resolve()
+
+	setPackage(foo, code2)
+
+	ctx.UpdateCode(code2)
+	ctx.Exec(ip-1, code2.Len())
+
+	if v := ctx.GetVar(ret); v != "002" {
+		t.Fatal("update code closure err", v)
 	}
 }
 
