@@ -19,7 +19,6 @@ package export
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"go/build"
 	"go/format"
@@ -93,7 +92,7 @@ func runCmd(cmd *base.Command, args []string) {
 			pkgPath = pkgPath[:len(pkgPath)-4]
 			exporAll = true
 		}
-		pkgs, err := LookupPkgList(pkgPath, exporAll)
+		pkgs, err := LookupPkgList(pkgPath, libDir, exporAll)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "go: lookup pkg %q error: %v\n", pkgPath, err)
 			continue
@@ -106,7 +105,7 @@ func runCmd(cmd *base.Command, args []string) {
 			}
 			if pkg.Module != nil && pkg.Module.GoMod != goMod {
 				goMod = pkg.Module.GoMod
-				fmt.Fprintf(os.Stderr, "go: finding module in %v\n", pkg.Module.Dir)
+				fmt.Fprintf(os.Stderr, "go: found module in %v\n", pkg.Module.Dir)
 			}
 			err := exportPkg(pkg.ImportPath, pkg.Dir, pkg.Goroot)
 			if err == nil {
@@ -131,31 +130,18 @@ func isIgnorePkg(pkg string) bool {
 	return false
 }
 
-func LookupPkgList(pkgPath string, exporAll bool) ([]*jsonPackage, error) {
-	// check go list
-	if !strings.Contains(pkgPath, "@") {
-		if pkgs, err := checkGoPkgList(pkgPath, "", exporAll); err != nil || len(pkgs) > 0 {
-			return pkgs, err
+func LookupPkgList(pkgPath string, workDir string, exporAll bool) ([]*jsonPackage, error) {
+	pkg, path, _ := gopkg.ParsePkgVer(pkgPath)
+	if strings.Contains(path, "@") {
+		cmd := exec.Command(gobin, "get", path)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+		if err != nil {
+			return nil, err
 		}
 	}
-	// check go mod cache
-	if srcDir, err := gopkg.LookupMod(pkgPath); err == nil {
-		pkg, _, _ := gopkg.ParsePkgVer(pkgPath)
-		if pkgs, err := checkGoPkgList(pkg, srcDir, exporAll); err != nil || len(pkgs) > 0 {
-			return pkgs, err
-		}
-	}
-	// check go mod download
-	pkg, mod, sub := gopkg.ParsePkgVer(pkgPath)
-	info, err := downloadMod(mod)
-	if err != nil {
-		return nil, fmt.Errorf("download %q failed, %v", mod, err)
-	}
-	dir := filepath.Join(info.Dir, sub)
-	if pkgs, err := checkGoPkgList(pkg, dir, exporAll); err != nil || len(pkgs) > 0 {
-		return pkgs, err
-	}
-	return nil, gopkg.ErrInvalidPkgPath
+	return checkGoPkgList(pkg, workDir, exporAll)
 }
 
 type jsonModInfo struct {
@@ -168,21 +154,6 @@ type jsonModInfo struct {
 	Dir      string // absolute path to cached source root directory
 	Sum      string // checksum for path, version (as in go.sum)
 	GoModSum string // checksum for go.mod (as in go.sum)
-}
-
-func downloadMod(pkgPath string) (*jsonModInfo, error) {
-	fmt.Println("go: downloading module", pkgPath)
-	cmd := exec.Command(gobin, "mod", "download", "-json", pkgPath)
-	data, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	var info jsonModInfo
-	err = json.Unmarshal(data, &info)
-	if err != nil {
-		return nil, err
-	}
-	return &info, nil
 }
 
 func exportPkg(pkgPath string, srcDir string, goRoot bool) (err error) {
