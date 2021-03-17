@@ -21,7 +21,6 @@ package cl
 import (
 	"errors"
 	"fmt"
-	"path"
 	"reflect"
 	"syscall"
 
@@ -288,7 +287,11 @@ func loadImport(ctx *fileCtx, spec *ast.ImportSpec) {
 			panic("not impl")
 		}
 	} else {
-		name = path.Base(pkgPath)
+		pkg := ctx.FindGoPackage(pkgPath)
+		if pkg == nil {
+			log.Panicln("package not found -", pkgPath)
+		}
+		name = pkg.Name()
 	}
 	ctx.imports[name] = pkgPath
 }

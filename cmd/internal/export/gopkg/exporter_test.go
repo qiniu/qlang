@@ -3,8 +3,11 @@ package gopkg
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
 	"go/format"
 	"go/importer"
+	"go/parser"
+	"go/token"
 	"go/types"
 	"io/ioutil"
 	"os/exec"
@@ -171,8 +174,28 @@ func TestExportGopQ(t *testing.T) {
 	}
 }
 
-func TestExportX(t *testing.T) {
-	err := Export("github.com/qiniu/x/log", ioutil.Discard)
+func parseSource(pkgpath string, src string) (*types.Package, error) {
+	// type-check src
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil {
+		return nil, fmt.Errorf("parse failed: %s", err)
+	}
+	var conf types.Config
+	pkg, err := conf.Check(pkgpath, fset, []*ast.File{f}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("typecheck failed: %s", err)
+	}
+	return pkg, nil
+}
+
+func TestExportV2(t *testing.T) {
+	var src = `package x;const Version = "1.0"`
+	pkg, err := parseSource("github.com/goplus/gop/x/v2", src)
+	if err != nil {
+		t.Fatal("parser source error:", err)
+	}
+	err = ExportPackage(pkg, ioutil.Discard)
 	if err != nil {
 		t.Fatal("TestExport failed:", err)
 	}
@@ -191,6 +214,16 @@ func TestImport(t *testing.T) {
 		t.Fatal("TestImport failed:", err)
 	}
 	if pkg.Path() != "go/types" {
+		t.Fatal(pkg.Path())
+	}
+}
+
+func TestImport2(t *testing.T) {
+	pkg, err := Import("github.com/qiniu/x/log")
+	if err != nil {
+		t.Fatal("TestImport failed:", err)
+	}
+	if pkg.Path() != "github.com/qiniu/x/log" {
 		t.Fatal(pkg.Path())
 	}
 }
