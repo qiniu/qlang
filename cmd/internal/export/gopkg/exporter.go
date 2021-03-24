@@ -31,6 +31,7 @@ import (
 
 type exportedFunc struct {
 	name string
+	ftyp string
 	exec string
 }
 
@@ -260,10 +261,11 @@ func isInternalPkg(pkg string) bool {
 }
 
 // ExportFunc exports a go function/method.
-func (p *Exporter) ExportFunc(fn *types.Func) error {
+func (p *Exporter) ExportFunc(fn *types.Func, iname string) error {
 	tfn := fn.Type().(*types.Signature)
 	isVariadic := tfn.Variadic()
 	isMethod := tfn.Recv() != nil
+	isIMethod := iname != ""
 	numIn := tfn.Params().Len()
 	numOut := tfn.Results().Len()
 	args := make([]string, numIn)
@@ -321,8 +323,9 @@ func (p *Exporter) ExportFunc(fn *types.Func) error {
 	name := fn.Name()
 	exec := name
 	if isMethod {
+		recv := tfn.Recv()
 		fullName := fn.FullName()
-		exec = typeName(tfn.Recv().Type()) + name
+		exec = typeName(recv.Type()) + name
 		name = withoutPkg(fullName)
 		fnName = "args[0]." + withPkg(p.pkgDot, name)
 	} else {
@@ -332,27 +335,38 @@ func (p *Exporter) ExportFunc(fn *types.Func) error {
 	if arity != "0" {
 		argsAssign = "	args := p.GetArgs(" + arity + ")\n"
 	}
-	if isMethod {
+	if isIMethod {
+		exec = "execi" + exec
+	} else if isMethod {
 		exec = "execm" + exec
 	} else {
 		exec = "exec" + exec
 	}
-	repl := strings.NewReplacer(
-		"$execFunc", exec,
-		"$ariName", arityName,
-		"$args", strings.Join(args, ", "),
-		"$argInit", argsAssign,
-		"$retAssign", retAssign,
-		"$retReturn", retReturn,
-		"$fn", fnName,
-	)
-	p.execs = append(p.execs, repl.Replace(`
+	ftyp := name
+	var skipExec bool
+	if isIMethod && tfn.Recv().Pkg() == p.pkg &&
+		typeName(tfn.Recv().Type()) != iname {
+		skipExec = true
+		name = "(" + iname + ")." + fn.Name()
+	}
+	if !skipExec {
+		repl := strings.NewReplacer(
+			"$execFunc", exec,
+			"$ariName", arityName,
+			"$args", strings.Join(args, ", "),
+			"$argInit", argsAssign,
+			"$retAssign", retAssign,
+			"$retReturn", retReturn,
+			"$fn", fnName,
+		)
+		p.execs = append(p.execs, repl.Replace(`
 func $execFunc($ariName int, p *gop.Context) {
 $argInit	$retAssign$fn($args)
 	p.$retReturn
 }
 `))
-	exported := exportedFunc{name: name, exec: exec}
+	}
+	exported := exportedFunc{name: name, ftyp: ftyp, exec: exec}
 	if isVariadic {
 		p.exportFnvs = append(p.exportFnvs, exported)
 	} else {
@@ -485,7 +499,7 @@ func registerFns(w io.Writer, pkgDot string, fns []exportedFunc, tag string) {
 	fmt.Fprintf(w, `	I.Register%ss(
 `, tag)
 	for _, fn := range fns {
-		name := withPkg(pkgDot, fn.name)
+		name := withPkg(pkgDot, fn.ftyp)
 		fmt.Fprintf(w, `		I.%s("%s", %s, %s),
 `, tag, fn.name, name, fn.exec)
 	}
