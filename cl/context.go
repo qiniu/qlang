@@ -190,7 +190,7 @@ type blockCtx struct {
 	fieldStructType reflect.Type
 	fieldIndex      []int
 	fieldExprX      func()
-	underscore      int
+	newIdentVar     int
 }
 
 // function block ctx

@@ -108,7 +108,6 @@ func compileIdentLHS(ctx *blockCtx, name string, mode compileMode) {
 	in := ctx.infer.Get(-1)
 	var addr iVar
 	if name == "_" {
-		ctx.underscore++
 		typ := boundType(in.(iValue))
 		addr = ctx.insertVar(name, typ)
 	} else {
@@ -116,8 +115,8 @@ func compileIdentLHS(ctx *blockCtx, name string, mode compileMode) {
 		addr, err = ctx.findVar(name)
 		if mode == lhsDefine {
 			addr, err = ctx.getCtxVar(name)
-			if addr != nil {
-				log.Panicf("compileIdentLHS failed: %s redeclared in this block\n", name)
+			if addr == nil {
+				ctx.newIdentVar++
 			}
 		}
 		if err == nil {
