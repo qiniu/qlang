@@ -151,6 +151,9 @@ func checkOpMatchType(op exec.Operator, x, y interface{}) error {
 		ix := x.(iValue)
 		iy := y.(iValue)
 		xkind, ykind := ix.Kind(), iy.Kind()
+		if xkind == reflect.Interface || ykind == reflect.Interface {
+			return nil
+		}
 		if xkind == exec.ConstUnboundPtr && ykind == exec.ConstUnboundPtr {
 			return nil
 		} else if xkind == exec.ConstUnboundPtr {
@@ -189,7 +192,7 @@ func checkType(t reflect.Type, v interface{}, b exec.Builder) {
 				log.Panicf("checkType: type `%v` doesn't implments interface `%v`", typVal, t)
 			}
 		} else if t != typVal {
-			if typVal.Kind() == reflect.Chan {
+			if typVal.Kind() == reflect.Chan || typVal.Kind() == reflect.Func {
 				if !typVal.ConvertibleTo(t) {
 					log.Panicf("checkType: cannot use `%v` as type `%v` in argument to produce", typVal, t)
 				}

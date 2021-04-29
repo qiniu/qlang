@@ -450,6 +450,12 @@ func (p *iBuilder) TypeCast(from, to reflect.Type) exec.Builder {
 	return p
 }
 
+// TypeAssert instr
+func (p *iBuilder) TypeAssert(from, to reflect.Type, twoValue bool) exec.Builder {
+	((*Builder)(p)).TypeAssert(from, to, twoValue)
+	return p
+}
+
 // GoBuiltin instr
 func (p *iBuilder) GoBuiltin(typ reflect.Type, op exec.GoBuiltin) exec.Builder {
 	((*Builder)(p)).GoBuiltin(typ, op)

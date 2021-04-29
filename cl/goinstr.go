@@ -23,6 +23,7 @@ import (
 	"github.com/goplus/gop/ast"
 	"github.com/goplus/gop/ast/spec"
 	"github.com/goplus/gop/exec.spec"
+	"github.com/goplus/reflectx"
 )
 
 // -----------------------------------------------------------------------------
@@ -437,6 +438,13 @@ func compileTypeCast(typ reflect.Type, ctx *blockCtx, v *ast.CallExpr) func() {
 	if kind <= reflect.Complex128 || kind == reflect.String { // can be constant
 		if cons, ok := in.(*constVal); ok {
 			cons.kind = typ.Kind()
+			if reflectx.IsNamed(typ) {
+				ctx.infer.Ret(1, &goValue{typ})
+				return func() {
+					pushConstVal(ctx.out, cons)
+					ctx.out.TypeCast(cons.Type(), typ)
+				}
+			}
 			return func() {
 				pushConstVal(ctx.out, cons)
 			}
@@ -444,7 +452,22 @@ func compileTypeCast(typ reflect.Type, ctx *blockCtx, v *ast.CallExpr) func() {
 		if lsh, ok := in.(*lshValue); ok {
 			lsh.bound(typ)
 		}
+	} else if kind == reflect.Interface {
+		if cons, ok := in.(*constVal); ok {
+			if cons.kind == exec.ConstUnboundPtr {
+				cons.kind = reflect.UnsafePointer
+			} else {
+				kind := cons.boundKind()
+				cons.v = boundConst(cons.v, exec.TypeFromKind(kind))
+				cons.kind = kind
+			}
+		}
+	} else if kind == reflect.Ptr {
+		if cons, ok := in.(*constVal); ok && cons.kind == exec.ConstUnboundPtr {
+			cons.kind = reflect.UnsafePointer
+		}
 	}
+
 	ctx.infer.Ret(1, &goValue{typ})
 	return func() {
 		xExpr()

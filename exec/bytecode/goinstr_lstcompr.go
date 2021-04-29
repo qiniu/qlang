@@ -190,6 +190,52 @@ func makeMap(typMap reflect.Type, arity int, p *Context) {
 	p.Ret(n, ret.Interface())
 }
 
+func execTypeAssert(i Instr, p *Context) {
+	args := p.Pop()
+	typ := getType(i&bitsOpTypeAssertShiftOperand, p)
+	var twoValue bool
+	if (i & (1 << bitsOpTypeAssertShift)) != 0 {
+		twoValue = true
+	}
+	if args == nil {
+		if twoValue {
+			p.Push(nil)
+			p.Push(false)
+		} else {
+			log.Panicf("interface conversion: interface is nil, not %v", typ)
+		}
+		return
+	}
+	if twoValue {
+		v := reflect.ValueOf(args)
+		vtyp := v.Type()
+		if typ == vtyp {
+			p.Push(args)
+			p.Push(true)
+		} else {
+			if typ.Kind() == reflect.Interface && vtyp.Implements(typ) {
+				p.Push(v.Convert(typ).Interface())
+				p.Push(true)
+			} else {
+				p.Push(nil)
+				p.Push(false)
+			}
+		}
+	} else {
+		v := reflect.ValueOf(args)
+		vtyp := v.Type()
+		if typ == vtyp {
+			p.Push(args)
+		} else {
+			if typ.Kind() == reflect.Interface && vtyp.Implements(typ) {
+				p.Push(v.Convert(typ).Interface())
+			} else {
+				log.Panicf("interface conversion: %v is not %v", vtyp, typ)
+			}
+		}
+	}
+}
+
 //go:nocheckptr
 func toUnsafePointer(v reflect.Value) unsafe.Pointer {
 	return unsafe.Pointer(uintptr(v.Uint()))
@@ -547,6 +593,16 @@ func (p *Builder) Slice3(i, j, k int) *Builder {
 // TypeCast instr
 func (p *Builder) TypeCast(from, to reflect.Type) *Builder {
 	i := (opTypeCast << bitsOpShift) | p.requireType(to)
+	p.code.data = append(p.code.data, i)
+	return p
+}
+
+// TypeAssert instr
+func (p *Builder) TypeAssert(from, to reflect.Type, twoValue bool) *Builder {
+	i := (opTypeAssert << bitsOpShift) | p.requireType(to)
+	if twoValue {
+		i |= (1 << bitsOpTypeAssertShift)
+	}
 	p.code.data = append(p.code.data, i)
 	return p
 }

@@ -106,7 +106,7 @@ func (ctx *varScope) setValue(idx uint32, v reflect.Value) {
 
 func setValue(x reflect.Value, v interface{}) {
 	if v != nil {
-		x.Set(reflect.ValueOf(v))
+		reflectx.SetValue(x, reflect.ValueOf(v))
 		return
 	}
 	x.Set(reflect.Zero(x.Type()))
@@ -183,7 +183,7 @@ func makeStruct(typStruct reflect.Type, arity int, p *Context) {
 	v := reflect.New(typStruct).Elem()
 	for i := 0; i < n; i += 2 {
 		index := args[i].(int)
-		reflectx.Field(v, index).Set(reflect.ValueOf(args[i+1]))
+		reflectx.SetValue(reflectx.Field(v, index), reflect.ValueOf(args[i+1]))
 	}
 	if ptr {
 		p.Ret(n, v.Addr().Interface())

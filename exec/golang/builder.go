@@ -107,6 +107,11 @@ type Builder struct {
 	inDeferOrGo callType // in defer/go statement currently
 }
 
+func (p *Builder) IsUserType(t reflect.Type) bool {
+	_, ok := p.types[t]
+	return ok
+}
+
 // NewBuilder creates a new Code Builder instance.
 func NewBuilder(pkgName string, code *Code, fset *token.FileSet) *Builder {
 	if code == nil {
@@ -145,11 +150,11 @@ var (
 // Resolve resolves all unresolved labels/functions/consts/etc.
 func (p *Builder) Resolve() *Code {
 	decls := make([]ast.Decl, 0, 8)
+	types := p.resolveTypes()
 	imports := p.resolveImports()
 	if imports != nil {
 		decls = append(decls, imports)
 	}
-	types := p.resolveTypes()
 	if types != nil {
 		decls = append(decls, types)
 	}
@@ -220,10 +225,6 @@ func (p *Builder) resolveTypes() *ast.GenDecl {
 	specs := make([]ast.Spec, 0, n)
 	for _, t := range p.types {
 		typ := t.Type()
-		if typ.Kind() == reflect.Ptr {
-			typ = typ.Elem()
-		}
-
 		spec := &ast.TypeSpec{
 			Name: Ident(t.Name()),
 			Type: Type(p, typ, true),
@@ -301,14 +302,16 @@ func (p *Builder) EndStmt(stmt, start interface{}) *Builder {
 }
 
 func (p *Builder) emitStmt(node ast.Stmt) {
+	if node == nil {
+		panic("node nil")
+	}
 	if stmt := p.cstmt; stmt != nil {
 		start := stmt.(ast.Node).Pos()
 		pos := p.fset.Position(start)
-		line := fmt.Sprintf("\n//line ./%s:%d", path.Base(pos.Filename), pos.Line)
-		if node == nil {
-			panic("node nil")
+		if pos.IsValid() {
+			line := fmt.Sprintf("\n//line ./%s:%d", path.Base(pos.Filename), pos.Line)
+			node = &printer.CommentedStmt{Comments: Comment(line), Stmt: node}
 		}
-		node = &printer.CommentedStmt{Comments: Comment(line), Stmt: node}
 	}
 	p.stmts = append(p.stmts, p.labeled(node, 0))
 }

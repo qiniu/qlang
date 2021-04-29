@@ -25,6 +25,7 @@ import (
 	"github.com/goplus/gop/ast/astutil"
 	"github.com/goplus/gop/exec.spec"
 	"github.com/goplus/gop/token"
+	"github.com/goplus/reflectx"
 	"github.com/qiniu/x/ctype"
 	"github.com/qiniu/x/errors"
 	"github.com/qiniu/x/log"
@@ -96,11 +97,45 @@ func compileExpr(ctx *blockCtx, expr ast.Expr) func() {
 		return compileEllipsis(ctx, v)
 	case *ast.StarExpr:
 		return compileStarExpr(ctx, v)
+	case *ast.InterfaceType:
+		return compileInterfaceType(ctx, v)
+	case *ast.TypeAssertExpr:
+		return compileTypeAssertExpr(ctx, v, false)
+	case *ast.TwoValueTypeAssertExpr:
+		return compileTypeAssertExpr(ctx, v.TypeAssertExpr, true)
 	case *ast.KeyValueExpr:
 		panic("compileExpr: ast.KeyValueExpr unexpected")
 	default:
 		log.Panicln("compileExpr failed: unknown -", reflect.TypeOf(v))
 		return nil
+	}
+}
+
+func compileInterfaceType(ctx *blockCtx, v *ast.InterfaceType) func() {
+	typ := toInterfaceType(ctx, v)
+	ctx.infer.Push(&nonValue{typ})
+	return nil
+}
+
+func compileTypeAssertExpr(ctx *blockCtx, v *ast.TypeAssertExpr, twoValue bool) func() {
+	exprX := compileExpr(ctx, v.X)
+	xtyp := ctx.infer.Pop().(iValue).Type()
+	typ := toType(ctx, v.Type).(reflect.Type)
+	if xtyp.Kind() != reflect.Interface {
+		log.Panicf("invalid type assertion: %v.(%v) (non-interface type %v on left)", ctx.code(v.X), typ, xtyp)
+	}
+	if (xtyp.NumMethod() != 0) && typ.Kind() != reflect.Interface {
+		if !typ.Implements(xtyp) {
+			log.Panicf("impossible type assertion: %v does not implement %v", typ, xtyp)
+		}
+	}
+	ctx.infer.Push(&goValue{t: typ})
+	if twoValue {
+		ctx.infer.Push(&goValue{t: exec.TyBool})
+	}
+	return func() {
+		exprX()
+		ctx.out.TypeAssert(xtyp, typ, twoValue)
 	}
 }
 
@@ -585,8 +620,12 @@ func compileConst(ctx *blockCtx, kind astutil.ConstKind, n interface{}) func() {
 func pushConstVal(b exec.Builder, c *constVal) {
 	c.reserve = b.Reserve()
 	if isConstBound(c.kind) {
-		v := boundConst(c.v, exec.TypeFromKind(c.kind))
-		c.reserve.Push(b, v)
+		if c.kind == reflect.Interface && c.v == nil {
+			c.reserve.Push(b, nil)
+		} else {
+			v := boundConst(c.v, exec.TypeFromKind(c.kind))
+			c.reserve.Push(b, v)
+		}
 	}
 }
 
@@ -1240,7 +1279,7 @@ func compileSelectorExprLHS(ctx *blockCtx, v *ast.SelectorExpr, mode compileMode
 	case *goValue:
 		_, t := countPtr(vx.t)
 		name := v.Sel.Name
-		if t.PkgPath() != "" && ast.IsExported(name) || t.PkgPath() == "" {
+		if t.PkgPath() != "" && ast.IsExported(name) || isUserStruct(t) {
 			if t.Kind() == reflect.Struct {
 				if sf, ok := t.FieldByName(name); ok {
 					typ := sf.Type
@@ -1427,7 +1466,7 @@ func compileSelectorExpr(ctx *blockCtx, call *ast.CallExpr, v *ast.SelectorExpr,
 		n, t := countPtr(vx.t)
 		autoCall := false
 		name := v.Sel.Name
-		if t.PkgPath() != "" && ast.IsExported(name) || t.PkgPath() == "" {
+		if t.PkgPath() != "" && ast.IsExported(name) || t.PkgPath() == "" || reflectx.IsNamed(t) {
 			if t.Kind() == reflect.Struct {
 				if sf, ok := t.FieldByName(name); ok {
 					ctx.infer.Ret(1, &goValue{t: sf.Type})
