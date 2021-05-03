@@ -227,30 +227,51 @@ func toStructType(ctx *blockCtx, v *ast.StructType) iType {
 	for _, field := range v.Fields.List {
 		fields = append(fields, toStructField(ctx, field)...)
 	}
-	return reflectx.StructOf(fields)
+	styp := reflectx.StructOf(fields)
+	return reflectx.MethodOf(styp, nil)
 }
 
 func toInterfaceType(ctx *blockCtx, v *ast.InterfaceType) iType {
-	methods := v.Methods.List
-	if methods == nil {
+	fields := v.Methods.List
+	if fields == nil {
 		return exec.TyEmptyInterface
 	}
-	panic("toInterfaceType: todo")
+	var embedded []reflect.Type
+	var methods []reflectx.Method
+	for _, field := range fields {
+		t := toType(ctx, field.Type).(reflect.Type)
+		kind := t.Kind()
+		if kind == reflect.Func {
+			methods = append(methods, reflectx.Method{
+				Name: field.Names[0].Name,
+				Type: t,
+			})
+		} else {
+			if kind != reflect.Interface {
+				log.Panicf("interface contains embedded non-interface %v", t)
+			}
+			embedded = append(embedded, t)
+		}
+	}
+	return reflectx.InterfaceOf(embedded, methods)
 }
 
 func toExternalType(ctx *blockCtx, v *ast.SelectorExpr) iType {
 	if ident, ok := v.X.(*ast.Ident); ok {
-		if sym, ok := ctx.find(ident.Name); ok {
-			switch t := sym.(type) {
-			case string:
-				pkg := ctx.FindGoPackage(t)
-				if pkg == nil {
-					log.Panicln("toExternalType failed: package not found -", v)
-				}
-				if typ, ok := pkg.FindType(v.Sel.Name); ok {
-					return typ
-				}
+		var pkgname string
+		if ident.Name == ctx.pkg.Name {
+			pkgname = ident.Name
+		} else {
+			if sym, ok := ctx.find(ident.Name); ok {
+				pkgname = sym.(string)
 			}
+		}
+		pkg := ctx.FindGoPackage(pkgname)
+		if pkg == nil {
+			log.Panicln("toExternalType failed: package not found -", v)
+		}
+		if typ, ok := pkg.FindType(v.Sel.Name); ok {
+			return typ
 		}
 	}
 	panic("toExternalType: todo")
@@ -373,10 +394,12 @@ func buildField(ctx *blockCtx, field *ast.Field, anonymous bool, fieldName strin
 // -----------------------------------------------------------------------------
 
 type typeDecl struct {
-	Methods map[string]*funcDecl
-	Type    reflect.Type
-	Name    string
-	Alias   bool
+	Methods  map[string]*funcDecl
+	Type     reflect.Type
+	Name     string
+	Alias    bool
+	Depends  []*typeDecl
+	Register bool
 }
 
 type methodDecl struct {
