@@ -38,6 +38,7 @@ type Context struct {
 	varScope
 	code   *Code
 	defers *theDefer
+	exec   *execInfo
 	ip     int
 	base   int
 }
@@ -51,6 +52,7 @@ func NewContext(in exec.Code) *Context {
 	code := in.(*Code)
 	p := &Context{
 		code: code,
+		exec: &execInfo{},
 	}
 	p.Init()
 	if len(code.vlist) > 0 {
@@ -65,6 +67,7 @@ func (ctx *Context) Go(arity int, f func(goctx *Context)) {
 		code: ctx.code,
 	}
 	goctx.Init()
+	goctx.exec = &execInfo{depth: ctx.exec.depth}
 	base := len(ctx.data) - arity
 	parent := ctx.varScope
 	goctx.parent = &parent
@@ -133,7 +136,22 @@ func (ctx *Context) getScope(local bool) *varScope {
 
 // Run executes the code.
 func (ctx *Context) Run() {
-	defer ctx.execDefers()
+	ctx.run()
+	if ctx.exec.panics != nil {
+		panic(ctx.exec.panics.v)
+	}
+}
+
+func (ctx *Context) run() {
+	ctx.exec.depth++
+	depth := ctx.exec.depth
+	defer func() {
+		ctx.exec.depth--
+		if v := recover(); v != nil {
+			ctx.exec.panics = &panicInfo{v, ctx.ip - 1, depth, "main", ctx.exec.panics}
+		}
+		ctx.execDefers()
+	}()
 	ctx.Exec(0, ctx.code.Len())
 }
 

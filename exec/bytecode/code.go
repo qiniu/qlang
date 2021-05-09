@@ -241,6 +241,19 @@ type Code struct {
 	varManager
 }
 
+type panicInfo struct {
+	v      interface{}
+	ip     int
+	depth  int
+	name   string
+	parent *panicInfo
+}
+
+type execInfo struct {
+	depth  int
+	panics *panicInfo
+}
+
 // NewCode returns a new Code object.
 func NewCode() *Code {
 	return &Code{data: make([]Instr, 0, 64)}

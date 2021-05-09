@@ -87,6 +87,8 @@ const (
 	GobImag = exec.GobImag
 	// GobClose - close: 8
 	GobClose = exec.GobClose
+	// GobRecover - recover: 9
+	GobRecover = exec.GobRecover
 )
 
 // -----------------------------------------------------------------------------
@@ -161,6 +163,13 @@ func execGoBuiltin(i Instr, p *Context) {
 	case GobClose:
 		v := reflect.ValueOf(p.Pop())
 		v.Close()
+	case GobRecover:
+		if p.exec.panics != nil && p.exec.depth == p.exec.panics.depth {
+			p.Push(p.exec.panics.v)
+			p.exec.panics = nil
+		} else {
+			p.Push(nil)
+		}
 	default:
 		log.Panicln("execGoBuiltin: todo -", op)
 	}
