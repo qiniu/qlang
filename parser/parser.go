@@ -703,11 +703,11 @@ func (p *parser) parseArrayTypeOrSliceLit(allowSliceLit bool) (expr ast.Expr, is
 	var elt ast.Expr
 	if allowSliceLit {
 		sliceLit := newSliceLit(lbrack, rbrack, len)
-		if p.tok == token.LBRACK { // idx of slice lit
-			return sliceLit, true
-		}
 		elt = p.tryType()
 		if elt == nil { // [a]
+			return sliceLit, true
+		} else if _, ok := elt.(*ast.ArrayType); ok && p.errors.Len() > 0 {
+			p.errors.Reset()
 			return sliceLit, true
 		}
 	} else {
