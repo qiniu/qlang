@@ -36,6 +36,7 @@ const (
 	bitsFuncKind   = 2
 	bitsFuncvArity = 10
 	bitsVarScope   = 6
+	bitsStackScope = 10
 	bitsAssignOp   = 4
 	bitsIndexOp    = 2
 	bitsIsPtr      = 2
@@ -68,6 +69,10 @@ const (
 	bitsOpVar        = bitsOp + bitsVarScope
 	bitsOpVarShift   = bitsInstr - bitsOpVar
 	bitsOpVarOperand = (1 << bitsOpVarShift) - 1
+
+	bitsOpStack        = bitsOp + bitsStackScope
+	bitsOpStackShift   = bitsInstr - bitsOpStack
+	bitsOpStackOperand = (1 << bitsOpStackShift) - 1
 
 	bitsOpCaseNE        = bitsOp + 10
 	bitsOpCaseNEShift   = bitsInstr - bitsOpCaseNE
@@ -103,9 +108,9 @@ const (
 	opCallFunc      = 22 // addr(26)
 	opCallFuncv     = 23 // funvArity(10) addr(16)
 	opReturn        = 24 // n(26)
-	opLoad          = 25 // index(26)
-	opAddr          = 26 // index(26)
-	opStore         = 27 // index(26)
+	opLoad          = 25 // stackDepth(10) addr(16)
+	opAddr          = 26 // stackDepth(10) addr(16)
+	opStore         = 27 // stackDepth(10) addr(16)
 	opClosure       = 28 // funcKind(2) addr(24)
 	opCallClosure   = 29 // arity(26)
 	opGoClosure     = 30 // funcKind(2) addr(24)
@@ -131,6 +136,7 @@ const (
 	opStruct        = 50 // funvArity(10) type(16)
 	opSend          = 51 // reserved(26)
 	opRecv          = 52 // reserved(26)
+	opBlock         = 53 // addr(26)
 )
 
 const (
@@ -195,9 +201,9 @@ var instrInfos = []InstrInfo{
 	opCallFunc:      {"callFunc", "", "addr", 26},                         // addr(26)
 	opCallFuncv:     {"callFuncv", "funvArity", "addr", (10 << 8) | 16},   // funvArity(10) addr(16)
 	opReturn:        {"return", "", "n", 26},                              // n(26)
-	opLoad:          {"load", "", "index", 26},                            // index(26)
-	opAddr:          {"addr", "", "index", 26},                            // index(26)
-	opStore:         {"store", "", "index", 26},                           // index(26)
+	opLoad:          {"load", "stackDepth", "addr", (10 << 8) | 16},       // index(26)
+	opAddr:          {"addr", "stackDepth", "addr", (10 << 8) | 16},       // index(26)
+	opStore:         {"store", "stackDepth", "addr", (10 << 8) | 16},      // index(26)
 	opClosure:       {"closure", "funcKind", "addr", (2 << 8) | 24},       // funcKind(2) addr(24)
 	opCallClosure:   {"callClosure", "", "arity", 26},                     // arity(26)
 	opGoClosure:     {"closureGo", "funcKind", "addr", (2 << 8) | 24},     // funcKind(2) addr(24)
@@ -223,6 +229,7 @@ var instrInfos = []InstrInfo{
 	opStruct:        {"struct", "funvArity", "type", (10 << 8) | 16},      // funvArity(10) type(16)
 	opSend:          {"send", "", "", 0},                                  // reserved(26)
 	opRecv:          {"recv", "", "", 0},                                  // reserved(26)
+	opBlock:         {"block", "", "addr", 26},
 }
 
 // -----------------------------------------------------------------------------
@@ -233,6 +240,7 @@ type Code struct {
 	valConsts  []interface{}
 	funs       []*FuncInfo
 	funvs      []*FuncInfo
+	blocks     []*BlockInfo
 	comprehens []*Comprehension
 	fors       []*ForPhrase
 	types      []reflect.Type
@@ -291,6 +299,7 @@ type Builder struct {
 	labels map[*Label]int
 	funcs  map[*FuncInfo]int
 	types  map[reflect.Type]uint32
+	iblock int
 	*varManager
 }
 

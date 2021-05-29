@@ -27,8 +27,8 @@ import (
 // -----------------------------------------------------------------------------
 
 type varScope struct {
-	vars   varsContext
-	addrs  []reflect.Value
+	vars   []reflect.Value
+	args   []reflect.Value
 	parent *varScope
 }
 
@@ -36,10 +36,11 @@ type varScope struct {
 type Context struct {
 	Stack
 	varScope
-	code   *Code
-	defers *theDefer
-	ip     int
-	base   int
+	code       *Code
+	defers     *theDefer
+	blockScope []varScope
+	ip         int
+	base       int
 }
 
 func newSimpleContext(data []interface{}) *Context {
@@ -75,10 +76,13 @@ func (ctx *Context) Go(arity int, f func(goctx *Context)) {
 
 // CloneSetVarScope clone already set varScope to new context
 func (ctx *Context) CloneSetVarScope(new *Context) {
-	if !ctx.vars.IsValid() {
-		return
-	}
-	for i := 0; i < ctx.vars.NumField(); i++ {
+	// if !ctx.vars.IsValid() {
+	// 	return
+	// }
+	// for i := 0; i < ctx.vars.NumField(); i++ {
+	// 	new.varScope.setVar(uint32(i), ctx.varScope.getVar(uint32(i)))
+	// }
+	for i := 0; i < len(ctx.vars); i++ {
 		new.varScope.setVar(uint32(i), ctx.varScope.getVar(uint32(i)))
 	}
 }
@@ -89,24 +93,25 @@ type savedScopeCtx struct {
 	varScope
 }
 
-func (ctx *Context) switchScope(parent *varScope, vmgr *varManager) (old savedScopeCtx) {
+func (ctx *Context) switchScope(parent *varScope, vmgr *varManager, ins []reflect.Type) (old savedScopeCtx) {
 	old.base = ctx.base
 	old.ip = ctx.ip
 	old.varScope = ctx.varScope
+	old.args = ctx.args
 	ctx.base = len(ctx.data)
 	ctx.parent = parent
 	ctx.vars = vmgr.makeVarsContext(ctx)
-
-	size := ctx.Len()
-	ctx.addrs = make([]reflect.Value, size)
-	for i := size; i > 0; i-- {
-		v := reflect.ValueOf(ctx.Get(-i))
-		if v.Kind() == reflect.Struct {
-			nv := reflect.New(v.Type()).Elem()
-			nv.Set(v)
-			ctx.addrs[size-i] = nv
+	ctx.args = make([]reflect.Value, len(ins))
+	off := len(ctx.data) - len(ins)
+	for i, in := range ins {
+		v := reflect.ValueOf(ctx.data[off+i])
+		if v.Kind() == reflect.Ptr {
+			ctx.args[i] = v
 		} else {
-			ctx.addrs[size-i] = v
+			ctx.args[i] = reflect.New(in).Elem()
+			if v.IsValid() {
+				ctx.args[i].Set(v)
+			}
 		}
 	}
 	return
@@ -116,7 +121,7 @@ func (ctx *Context) restoreScope(old savedScopeCtx) {
 	ctx.ip = old.ip
 	ctx.base = old.base
 	ctx.varScope = old.varScope
-	ctx.addrs = old.addrs
+	ctx.args = old.args
 }
 
 func (ctx *Context) getScope(local bool) *varScope {
@@ -262,6 +267,7 @@ var _execTable = [...]func(i Instr, p *Context){
 	opStruct:        execStruct,
 	opSend:          execSend,
 	opRecv:          execRecv,
+	opBlock:         execBlock,
 }
 
 var execTable []func(i Instr, p *Context)
