@@ -393,6 +393,99 @@ func TestTakeAddrStringBad(t *testing.T) {
 		"cannot take the address of m[1]\n")
 }
 
+func TestTakeAddrInFunc(t *testing.T) {
+	cltest.Expect(t, `
+	func test(i int) {
+		printf("%T %T\n",i,&i)
+	}
+	test(100)
+	`, "int *int\n")
+	cltest.Expect(t, `
+	func test(i *int, j int) {
+		*i = 100
+		j = 100
+	}
+	var m1,m2 int
+	test(&m1,m2)
+	println(m1,m2)
+	`, "100 0\n")
+	cltest.Expect(t, `
+	func test(i []int) []int {
+		i = append(i,100)
+		println(i)
+		return i
+	}
+	i := [1,2,3]
+	j := test(i)
+	println(i)
+	println(j)
+	`, "[1 2 3 100]\n[1 2 3]\n[1 2 3 100]\n")
+	cltest.Expect(t, `
+	import "fmt"
+	func set(e *error) {
+		*e = fmt.Errorf("error")
+	}
+	func fn(err error) {
+		fmt.Println(err)
+		set(&err)
+		fmt.Println(err)
+	}
+	fn(nil)`, "<nil>\nerror\n")
+	cltest.Expect(t, `
+	type M struct {
+		X int
+		Y int
+	}
+	func setx(i *M) {
+		i.X = 100
+	}
+	func test1(i M) {
+		setx(&i)
+		printf("%v %v\n",i.X,i.Y)
+	}
+	func test2(i M) {
+		i.Y = 100
+		printf("%v %v\n",i.X,i.Y)
+	}
+	m := M{1,1}
+	test1(m)
+	test2(m)
+	`, "100 1\n1 100\n")
+	cltest.Expect(t, `
+	type M struct {
+		X int
+		Y int
+	}
+	func set(s *string, m M) int {
+		*s = "s0"
+		return 100
+	}
+	func setv(v *int) {
+		*v = 20
+	}
+	func set2(s *string, m *M) int {
+		*s = "s3"
+		m.Y = -2
+		return 200
+	}
+	func f2(s1 string, s2 string, m M) {
+		func(v int) {
+			println("hello", v, set(&s1,m))
+			m.X = -1
+			s2 = "s22"
+			setv(&v)
+			println(s1, s2, v, m)
+		}(10)
+		s1 = "s11"
+		println(s1, s2, m)
+		set2(&s2,&m)
+		println(s1, s2, m)
+	}
+	m := M{1, 2}
+	f2("s1", "s2", m)
+	`, "hello 10 100\ns0 s22 20 {-1 2}\ns11 s22 {-1 2}\ns11 s3 {-1 -2}\n")
+}
+
 func TestTypeCast(t *testing.T) {
 	cltest.Call(t, `
 	x := []byte("hello")
