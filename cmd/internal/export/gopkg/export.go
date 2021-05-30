@@ -37,22 +37,43 @@ import (
 
 // -----------------------------------------------------------------------------
 
-func exportFunc(e *Exporter, o *types.Func, prefix string) (err error) {
-	e.ExportFunc(o)
+func exportFunc(e *Exporter, o *types.Func, iname string) (err error) {
+	e.ExportFunc(o, iname)
 	return nil
 }
 
 func exportTypeName(e *Exporter, o *types.TypeName) (err error) {
-	t := o.Type().(*types.Named)
 	e.ExportType(o)
-
-	n := t.NumMethods()
-	for i := 0; i < n; i++ {
-		m := t.Method(i)
-		if !m.Exported() {
-			continue
+	if t, ok := o.Type().(*types.Named); ok {
+		n := t.NumMethods()
+		for i := 0; i < n; i++ {
+			m := t.Method(i)
+			if !m.Exported() {
+				continue
+			}
+			exportFunc(e, m, "")
 		}
-		exportFunc(e, m, "  ")
+	}
+	if t, ok := o.Type().Underlying().(*types.Interface); ok {
+		t = t.Complete()
+		n := t.NumMethods()
+		for i := 0; i < n; i++ {
+			m := t.Method(i)
+			if !m.Exported() {
+				continue
+			}
+			sig := m.Type().(*types.Signature)
+			if sig.Recv().Pkg() != o.Pkg() {
+				nsig := types.NewSignature(
+					types.NewVar(o.Pos(), o.Pkg(), o.Name(), o.Type()),
+					sig.Params(),
+					sig.Results(),
+					sig.Variadic(),
+				)
+				m = types.NewFunc(m.Pos(), o.Pkg(), m.Name(), nsig)
+			}
+			exportFunc(e, m, o.Name())
+		}
 	}
 	return nil
 }
@@ -240,6 +261,8 @@ func ExportPackage(pkg *types.Package, w io.Writer) (err error) {
 			err = exportTypeName(e, o)
 		case *types.Func:
 			err = exportFunc(e, o, "")
+		case *types.Builtin:
+			log.Println("skip builtin", o)
 		default:
 			log.Panicln("export failed: unknown type -", reflect.TypeOf(o))
 		}
