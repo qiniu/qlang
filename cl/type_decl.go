@@ -227,30 +227,76 @@ func toStructType(ctx *blockCtx, v *ast.StructType) iType {
 	for _, field := range v.Fields.List {
 		fields = append(fields, toStructField(ctx, field)...)
 	}
-	return reflectx.StructOf(fields)
+	styp := reflectx.StructOf(fields)
+	return reflectx.StructToMethodSet(styp)
 }
 
 func toInterfaceType(ctx *blockCtx, v *ast.InterfaceType) iType {
-	methods := v.Methods.List
-	if methods == nil {
+	fields := v.Methods.List
+	if fields == nil {
 		return exec.TyEmptyInterface
 	}
-	panic("toInterfaceType: todo")
+	var embedded []reflect.Type
+	var methods []reflect.Method
+	for _, field := range fields {
+		t := toType(ctx, field.Type).(reflect.Type)
+		kind := t.Kind()
+		if kind == reflect.Func {
+			methods = append(methods, reflect.Method{
+				Name: field.Names[0].Name,
+				Type: t,
+			})
+		} else {
+			if kind != reflect.Interface {
+				log.Panicf("interface contains embedded non-interface %v", t)
+			}
+			embedded = append(embedded, t)
+		}
+	}
+	return reflectx.InterfaceOf(embedded, methods)
+}
+
+func setInterfaceType(ctx *blockCtx, typ reflect.Type, v *ast.InterfaceType) error {
+	fields := v.Methods.List
+	if fields == nil {
+		return nil
+	}
+	var embedded []reflect.Type
+	var methods []reflect.Method
+	for _, field := range fields {
+		t := toType(ctx, field.Type).(reflect.Type)
+		kind := t.Kind()
+		if kind == reflect.Func {
+			methods = append(methods, reflect.Method{
+				Name: field.Names[0].Name,
+				Type: t,
+			})
+		} else {
+			if kind != reflect.Interface {
+				log.Panicf("interface contains embedded non-interface %v", t)
+			}
+			embedded = append(embedded, t)
+		}
+	}
+	return reflectx.SetInterfaceType(typ, embedded, methods)
 }
 
 func toExternalType(ctx *blockCtx, v *ast.SelectorExpr) iType {
 	if ident, ok := v.X.(*ast.Ident); ok {
-		if sym, ok := ctx.find(ident.Name); ok {
-			switch t := sym.(type) {
-			case string:
-				pkg := ctx.FindGoPackage(t)
-				if pkg == nil {
-					log.Panicln("toExternalType failed: package not found -", v)
-				}
-				if typ, ok := pkg.FindType(v.Sel.Name); ok {
-					return typ
-				}
+		var pkgname string
+		if ident.Name == ctx.pkg.Name {
+			pkgname = ident.Name
+		} else {
+			if sym, ok := ctx.find(ident.Name); ok {
+				pkgname = sym.(string)
 			}
+		}
+		pkg := ctx.FindGoPackage(pkgname)
+		if pkg == nil {
+			log.Panicln("toExternalType failed: package not found -", v)
+		}
+		if typ, ok := pkg.FindType(v.Sel.Name); ok {
+			return typ
 		}
 	}
 	panic("toExternalType: todo")
@@ -259,6 +305,15 @@ func toExternalType(ctx *blockCtx, v *ast.SelectorExpr) iType {
 func toIdentType(ctx *blockCtx, ident string) iType {
 	if typ, ok := ctx.builtin.FindType(ident); ok {
 		return typ
+	}
+	if t, ok := ctx.decls[ident]; ok {
+		if t.typ != nil {
+			return t.typ
+		}
+		if ctx.cdecl.kind != dtStruct {
+			ctx.cdecl.appendDeps(ident)
+		}
+		return t.decl
 	}
 	typ, err := ctx.findType(ident)
 	if err != nil {
@@ -373,10 +428,12 @@ func buildField(ctx *blockCtx, field *ast.Field, anonymous bool, fieldName strin
 // -----------------------------------------------------------------------------
 
 type typeDecl struct {
-	Methods map[string]*funcDecl
-	Type    reflect.Type
-	Name    string
-	Alias   bool
+	Methods  map[string]*funcDecl
+	Type     reflect.Type
+	Name     string
+	Alias    bool
+	Depends  []*typeDecl
+	Register bool
 }
 
 type methodDecl struct {

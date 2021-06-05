@@ -21,6 +21,7 @@ import (
 	"go/token"
 	"reflect"
 
+	"github.com/goplus/reflectx"
 	"github.com/qiniu/x/log"
 )
 
@@ -103,12 +104,19 @@ func Field(p *Builder, name string, typ reflect.Type, tag string, ellipsis bool)
 }
 
 // Methods instr
-func Methods(p *Builder, typ reflect.Type) []*ast.Field {
+func Methods(p *Builder, typ reflect.Type) (fields []*ast.Field) {
 	n := typ.NumMethod()
 	if n == 0 {
 		return nil
 	}
-	panic("Methods: todo")
+	for i := 0; i < n; i++ {
+		m := typ.Method(i)
+		fields = append(fields, &ast.Field{
+			Names: []*ast.Ident{ast.NewIdent(m.Name)},
+			Type:  Type(p, m.Type),
+		})
+	}
+	return
 }
 
 // InterfaceType instr
@@ -152,16 +160,21 @@ func FuncType(p *Builder, typ reflect.Type) *ast.FuncType {
 // Type instr
 func Type(p *Builder, typ reflect.Type, actualTypes ...bool) ast.Expr {
 	if len(actualTypes) == 0 || (len(actualTypes) > 0 && !actualTypes[0]) {
-		if gtype, ok := p.types[typ]; ok {
-			return Ident(gtype.Name())
+		for t, g := range p.types {
+			if t == typ || (t.PkgPath() == typ.PkgPath() && t.Name() == typ.Name()) {
+				return Ident(g.name)
+			}
 		}
+	}
+	if named, ok := reflectx.ToNamed(typ); ok && named.From != nil {
+		return Type(p, named.From)
 	}
 	pkgPath, name := typ.PkgPath(), typ.Name()
 	if typ.String() == "unsafe.Pointer" {
 		pkgPath = "unsafe"
 	}
 	log.Debug(typ, "-", "pkgPath:", pkgPath, "name:", name)
-	if name != "" {
+	if name != "" && !p.IsUserType(typ) {
 		if pkgPath != "" {
 			pkg := p.Import(pkgPath)
 			return &ast.SelectorExpr{X: Ident(pkg), Sel: Ident(name)}
