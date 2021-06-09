@@ -39,8 +39,10 @@ func StructType(typ reflect.Type) ast.Expr {
 
 func toField(f reflect.StructField) *ast.Field {
 	var field = &ast.Field{}
-	field.Names = []*ast.Ident{
-		Ident(f.Name),
+	if !f.Anonymous {
+		field.Names = []*ast.Ident{
+			Ident(f.Name),
+		}
 	}
 	field.Type = Type(f.Type)
 	return field
@@ -108,7 +110,15 @@ func Methods(typ reflect.Type) []*ast.Field {
 	if n == 0 {
 		return nil
 	}
-	panic("Methods: todo")
+	fields := make([]*ast.Field, n, n)
+	for i := 0; i < n; i++ {
+		m := typ.Method(i)
+		fields[i] = &ast.Field{
+			Names: []*ast.Ident{&ast.Ident{Name: m.Name}},
+			Type:  FuncType(m.Type),
+		}
+	}
+	return fields
 }
 
 // InterfaceType instr

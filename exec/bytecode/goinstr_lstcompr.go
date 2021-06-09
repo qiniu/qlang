@@ -190,6 +190,91 @@ func makeMap(typMap reflect.Type, arity int, p *Context) {
 	p.Ret(n, ret.Interface())
 }
 
+func execTypeMethod(i Instr, p *Context) {
+	typ := getType(i&bitsOperand, p)
+	ms := p.code.typeMethods[typ]
+	for i := 0; i < len(ms); i++ {
+		m := ms[i]
+		numIn := m.Info.NumIn()
+		numOut := m.Info.NumOut()
+		if m.Info.IsVariadic() {
+			m.Func = func(args []reflect.Value) (out []reflect.Value) {
+				for _, arg := range args {
+					p.data = append(p.data, arg.Interface())
+				}
+				p.Callv(m.Info, uint32(numIn-1))
+				for i := 0; i < numOut; i++ {
+					out = append(out, reflect.ValueOf(p.Get(i-numOut)))
+				}
+				if numOut > 0 {
+					p.data = p.data[:len(p.data)-numOut]
+				}
+				return
+			}
+		} else {
+			m.Func = func(args []reflect.Value) (out []reflect.Value) {
+				for _, arg := range args {
+					p.data = append(p.data, arg.Interface())
+				}
+				p.Call(m.Info)
+				for i := 0; i < numOut; i++ {
+					out = append(out, reflect.ValueOf(p.Get(i-numOut)))
+				}
+				if numOut > 0 {
+					p.data = p.data[:len(p.data)-numOut]
+				}
+				return
+			}
+		}
+	}
+}
+
+func execTypeAssert(i Instr, p *Context) {
+	args := p.Pop()
+	typ := getType(i&bitsOpTypeAssertShiftOperand, p)
+	var twoValue bool
+	if (i & (1 << bitsOpTypeAssertShift)) != 0 {
+		twoValue = true
+	}
+	if args == nil {
+		if twoValue {
+			p.Push(nil)
+			p.Push(false)
+		} else {
+			log.Panicf("interface conversion: interface is nil, not %v", typ)
+		}
+		return
+	}
+	if twoValue {
+		v := reflect.ValueOf(args)
+		vtyp := v.Type()
+		if typ == vtyp {
+			p.Push(args)
+			p.Push(true)
+		} else {
+			if typ.Kind() == reflect.Interface && vtyp.Implements(typ) {
+				p.Push(v.Convert(typ).Interface())
+				p.Push(true)
+			} else {
+				p.Push(nil)
+				p.Push(false)
+			}
+		}
+	} else {
+		v := reflect.ValueOf(args)
+		vtyp := v.Type()
+		if typ == vtyp {
+			p.Push(args)
+		} else {
+			if typ.Kind() == reflect.Interface && vtyp.Implements(typ) {
+				p.Push(v.Convert(typ).Interface())
+			} else {
+				log.Panicf("interface conversion: %v is not %v", vtyp, typ)
+			}
+		}
+	}
+}
+
 //go:nocheckptr
 func toUnsafePointer(v reflect.Value) unsafe.Pointer {
 	return unsafe.Pointer(uintptr(v.Uint()))
@@ -551,6 +636,16 @@ func (p *Builder) TypeCast(from, to reflect.Type) *Builder {
 	return p
 }
 
+// TypeAssert instr
+func (p *Builder) TypeAssert(from, to reflect.Type, twoValue bool) *Builder {
+	i := (opTypeAssert << bitsOpShift) | p.requireType(to)
+	if twoValue {
+		i |= (1 << bitsOpTypeAssertShift)
+	}
+	p.code.data = append(p.code.data, i)
+	return p
+}
+
 // New instr
 func (p *Builder) New(typ reflect.Type) *Builder {
 	i := (opZero << bitsOpShift) | (1 << bitsOpZeroShift) | p.requireType(typ)
@@ -566,9 +661,11 @@ func (p *Builder) Zero(typ reflect.Type) *Builder {
 }
 
 func (p *Builder) requireType(typ reflect.Type) uint32 {
-	kind := typ.Kind()
-	if exec.SizeofKind(kind) > 0 {
-		return uint32(kind)
+	if typ.PkgPath() == "" {
+		kind := typ.Kind()
+		if exec.SizeofKind(kind) > 0 {
+			return uint32(kind)
+		}
 	}
 	return p.newType(typ)
 }

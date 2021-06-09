@@ -118,7 +118,7 @@ func igoCopy(ctx *blockCtx, v *ast.CallExpr, ct callType) func() {
 		log.Panicln("arguments to copy must be slices; have ", dstTy.Kind())
 	}
 	if ct == callExpr {
-		ctx.infer.Ret(1, &goValue{exec.TyInt})
+		ctx.infer.Ret(1, &goValue{t: exec.TyInt})
 	}
 	return func() {
 		dstExpr()
@@ -320,7 +320,7 @@ func igoComplex(ctx *blockCtx, v *ast.CallExpr, ct callType) func() {
 		elem = exec.TyFloat64
 		typ = exec.TyComplex128
 	}
-	ctx.infer.Ret(2, &goValue{typ})
+	ctx.infer.Ret(2, &goValue{t: typ})
 	return func() {
 		xExpr()
 		yExpr()
@@ -360,7 +360,7 @@ func igoRealOrImag(ctx *blockCtx, v *ast.CallExpr, op exec.GoBuiltin) func() {
 		ctyp = exec.TyComplex128
 		typ = exec.TyFloat64
 	}
-	ctx.infer.Ret(1, &goValue{typ})
+	ctx.infer.Ret(1, &goValue{t: typ})
 	return func() {
 		expr()
 		if c, ok := in.(*constVal); ok {
@@ -437,6 +437,14 @@ func compileTypeCast(typ reflect.Type, ctx *blockCtx, v *ast.CallExpr) func() {
 	if kind <= reflect.Complex128 || kind == reflect.String { // can be constant
 		if cons, ok := in.(*constVal); ok {
 			cons.kind = typ.Kind()
+			if typ.PkgPath() != "" {
+				c := newConstVal(cons.v, cons.kind)
+				c.typed = typ
+				ctx.infer.Ret(1, &goValue{t: typ, c: c})
+				return func() {
+					pushConstVal(ctx.out, c)
+				}
+			}
 			return func() {
 				pushConstVal(ctx.out, cons)
 			}
@@ -444,8 +452,23 @@ func compileTypeCast(typ reflect.Type, ctx *blockCtx, v *ast.CallExpr) func() {
 		if lsh, ok := in.(*lshValue); ok {
 			lsh.bound(typ)
 		}
+	} else if kind == reflect.Interface {
+		if cons, ok := in.(*constVal); ok {
+			if cons.kind == exec.ConstUnboundPtr {
+				cons.kind = reflect.UnsafePointer
+			} else {
+				kind := cons.boundKind()
+				cons.v = boundConst(cons, exec.TypeFromKind(kind))
+				cons.kind = kind
+			}
+		}
+	} else if kind == reflect.Ptr {
+		if cons, ok := in.(*constVal); ok && cons.kind == exec.ConstUnboundPtr {
+			cons.kind = reflect.UnsafePointer
+		}
 	}
-	ctx.infer.Ret(1, &goValue{typ})
+
+	ctx.infer.Ret(1, &goValue{t: typ})
 	return func() {
 		xExpr()
 		iv := in.(iValue)

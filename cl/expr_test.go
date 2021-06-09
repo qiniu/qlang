@@ -400,6 +400,70 @@ func TestTypeCast(t *testing.T) {
 	`).Equal([]byte("hello"))
 }
 
+func TestTypeCast2(t *testing.T) {
+	cltest.Expect(t, `
+	type M int
+	func (m M) Foo() {
+		println("foo",m)
+	}
+	m := M(10)
+	m.Foo()
+	`, "foo 10\n")
+	cltest.Expect(t, `
+	type Point struct {
+	}
+	type M int
+	func (m M) Foo() {
+		println("foo",m)
+	}
+	m := M(&Point{})
+	`, "", nil)
+}
+
+func TestTypeCast3(t *testing.T) {
+	cltest.Expect(t, `
+	type Int int
+	v1 := Int(100)
+	v2 := Int(10)
+	println(v1)
+	println(-v1)
+	println(^v1)
+	println(v1 + v2)
+	println(v1 - v2)
+	println(v1 * v2)
+	println(v1 / v2)
+	println(v1 == v2)
+	println(v1 != v2)
+	println(v1 > v2)
+	println(v1 < v2)
+	println(v1 >= v2)
+	println(v1 <= v2)
+	`, "100\n-100\n-101\n110\n90\n1000\n10\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\n")
+}
+
+func TestDiffrentType(t *testing.T) {
+	cltest.Expect(t, `
+	type Pt1 struct {
+		X int
+		Y int
+	}
+	func (p *Pt1) Test() {
+		println("pt1", p)
+	}
+	type Pt2 struct {
+		X int
+		Y int
+	}
+	func (p *Pt2) Test() {
+		println("pt2",p)
+	}
+	pt1 := Pt1{10,20}
+	pt2 := Pt2{1,2}
+	pt1.Test()
+	pt2.Test()
+	`, "pt1 &{10 20}\npt2 &{1 2}\n")
+}
+
 func TestPkgTypeConv(t *testing.T) {
 	cltest.Expect(t, `
 	import "sort"
@@ -1312,51 +1376,46 @@ func TestStruct2(t *testing.T) {
 // -----------------------------------------------------------------------------
 var testMethodClauses = map[string]testData{
 	"method set": {`
-					type Person struct {
-						Name string
-						Age  int
-					}
-					func (p *Person) SetName(name string) {
-						p.Name = name
-					}
+	type Person struct {
+		Name string
+		Age  int
+	}
+	func (p *Person) SetName(name string) {
+		p.Name = name
+	}
+	p := &Person{
+		Name: "bar",
+		Age:  30,
+	}
+	p.SetName("foo")
+	println(p.Name)
+	`, "foo\n", false},
 
-					p := &Person{
-						Name: "bar",
-						Age:  30,
-					}
-
-					p.SetName("foo")
-					println(p.Name)
-					`, "foo\n", false},
 	"method get": {`
-					type Person struct {
-						Name string
-						Age  int
-					}
-					func (p *Person) GetName() string {
-						return p.Name
-					}
-
-					p := &Person{
-						Name: "bar",
-						Age:  30,
-					}
-
-					println(p.GetName())
-					`, "bar\n", false},
+	type Person struct {
+		Name string
+		Age  int
+	}
+	func (p *Person) GetName() string {
+		return p.Name
+	}
+	p := &Person{
+		Name: "bar",
+		Age:  30,
+	}
+	println(p.GetName())
+	`, "bar\n", false},
 
 	"struct set ptr": {`
 	type Person struct {
 		Name string
 		Age  int
 	}
-
 	p := &Person{
 		Name: "bar",
 		Age:  30,
 	}
 	p.Name = "foo"
-
 	println(p)
 	`, "&{foo 30}\n", false},
 
@@ -1365,13 +1424,11 @@ var testMethodClauses = map[string]testData{
 		Name string
 		Age  int
 	}
-
 	p := Person{
 		Name: "bar",
 		Age:  30,
 	}
 	p.Name = "foo"
-
 	println(p)
 	`, "{foo 30}\n", false},
 
@@ -1383,84 +1440,290 @@ var testMethodClauses = map[string]testData{
 	func SetName(p *Person,name string) {
 		p.Name = name
 	}
-
 	p := Person{
 		Name: "bar",
 		Age:  30,
 	}
 	SetName(&p,"foo")
-
 	println(p)
 	`, "{foo 30}\n", false},
 
 	"method func no args": {`
-					type Person struct {
-						Name string ` + "`json:\"name\"`" + `
-						Age  int
-					}
-					func (p *Person) PrintName() {
-						println(p.Name)
-					}
+	type Person struct {
+		Name string ` + "`json:\"name\"`" + `
+		Age  int
+	}
+	func (p *Person) PrintName() {
+		println(p.Name)
+	}
+	p := &Person{
+		Name: "bar",
+		Age:  30,
+	}
+	p.PrintName()
+	`, "bar\n", false},
 
-					p := &Person{
-						Name: "bar",
-						Age:  30,
-					}
-
-					p.PrintName()
-					`, "bar\n", false},
 	"method ptr struct no prt": {`
-					type Person struct {
-						Name string ` + "`json:\"name\"`" + `
-						Age  int
-					}
-					func (p *Person) PrintName() {
-						println(p.Name)
-					}
-
-					p := Person{
-						Name: "bar",
-						Age:  30,
-					}
-
-					p.PrintName()
-					`, "bar\n", false},
+	type Person struct {
+		Name string ` + "`json:\"name\"`" + `
+		Age  int
+	}
+	func (p *Person) PrintName() {
+		println(p.Name)
+	}
+	p := Person{
+		Name: "bar",
+		Age:  30,
+	}
+	p.PrintName()
+	`, "bar\n", false},
 
 	"method load field": {`
-					type Person struct {
-						Name string
-						Age  int
-					}
-					func (p *Person) SetName(name string,age int) {
-						p.Name = name
-						p.Age = age
-						println(name)
-						println(p.Age)
-					}
+	type Person struct {
+		Name string
+		Age  int
+	}
+	func (p *Person) SetName(name string,age int) {
+		p.Name = name
+		p.Age = age
+		println(name)
+		println(p.Age)
+	}
+	p := Person{
+		Name: "bar",
+		Age:  30,
+	}
+	p.SetName("foo",31)
+	`, "foo\n31\n", false},
 
-					p := Person{
-						Name: "bar",
-						Age:  30,
-					}
-
-					p.SetName("foo",31)
-					`, "foo\n31\n", false},
 	"method int type": {`
-					
-					type M int
+	type M int
+	func (m M) Foo() {
+		println("foo", m)
+	}
+	m := M(0)
+	m.Foo()
+	println(m)
+	`, "foo 0\n0\n", false},
+	"method two int type": {`
+	type M int
+	type M2 int
+	func (m M) Foo() {
+		println("foo", m)
+	}
+	func (m M2) Foo() {
+		println("foo2", m)
+	}
+	m := M(0)
+	m.Foo()
+	m2 := M2(1)
+	m2.Foo()
+	println(m)
+	println(m2)
+	`, "foo 0\nfoo2 1\n0\n1\n", false},
 
-					func (m M) Foo() {
-						println("foo", m)
-					}
+	"method int type conv": {`
+	type M int
+	type M2 int
+	func (m M) Foo() {
+		println("foo", m)
+	}
+	func (m M2) Foo() {
+		println("foo2", m)
+	}
+	M(10).Foo()
+	M2(11).Foo()
+	`, "foo 10\nfoo2 11\n", false},
 
-					m := M(0)
-					m.Foo()
-					println(m)
-					`, "foo 0\n0\n", false},
+	"method two struct type": {`
+	type Pt1 struct {
+		X int
+		Y int
+	}
+	func (p *Pt1) Test() {
+		println("pt1", p)
+	}
+	type Pt2 struct {
+		X int
+		Y int
+	}
+	func (p *Pt2) Test() {
+		println("pt2",p)
+	}
+	pt1 := Pt1{1,2}
+	pt2 := Pt2{3,4}
+	pt1.Test()
+	pt2.Test()
+	`, "pt1 &{1 2}\npt2 &{3 4}\n", false},
+
+	"method struct field type": {`
+	type M int
+	func (m M) Foo() {
+		println("foo", m)
+	}
+	type Pt struct {
+		X M
+		Y M
+	}
+	type Pt2 Pt
+	pt := &Pt{10,20}
+	pt.Y.Foo()
+	pt2 := &Pt2{30,40}
+	pt2.Y.Foo()
+	M(11).Foo()
+	`, "foo 20\nfoo 40\nfoo 11\n", false},
+	"method two [5]byte type": {`
+	type T1 [5]byte
+	type T2 [5]byte
+	func (t T1) Test() { println(t) }
+	func (t T2) Test() { println(t) }
+	var t1 T1
+	var t2 T2
+	t1 = T1{'h','e','l','l','o'}
+	t2 = T2{'w','o','r','l','d'}
+	t1.Test()
+	t2.Test()
+	`, "[104 101 108 108 111]\n[119 111 114 108 100]\n", false},
+	"method two []byte type": {`
+	type TByte []byte
+	type TByte2 []byte
+	func (t TByte) Test() { println(string(t)) }
+	func (t TByte2) Test() { println(string(t)) }
+	TByte("byte1").Test()
+	TByte2("byte2").Test()
+	`, "byte1\nbyte2\n", false},
+
+	"method two []string type": {`
+	type T1 []string
+	type T2 []string
+	func (t T1) Test() { println(t) }
+	func (t T2) Test() { println(t) }
+	var t1 T1
+	var t2 T2
+	t1 = append(t1,"hello")
+	t2 = append(t2,"world")
+	t1.Test()
+	t2.Test()
+	`, "[hello]\n[world]\n", false},
+
+	"method two map[int]string type": {`
+	type T1 map[int]string
+	type T2 map[int]string
+	func (t T1) Test() { println(t) }
+	func (t T2) Test() { println(t) }
+	t1 := make(T1)
+	t2 := make(T2)
+	t1[10] = "hello"
+	t2[20] = "world"
+	t1.Test()
+	t2.Test()
+	`, "map[10:hello]\nmap[20:world]\n", false},
+
+	"method slice": {`
+	type T []int
+	func (t T) Len() int { return len(t) }
+	type I interface {
+		Len() int
+	}
+	var t T = T{0, 1, 2, 3, 4}
+	var i I
+	i = t
+	if i.Len() != 5 {
+		println("i.Len", i.Len())
+		panic("fail")
+	}
+	if T.Len(t) != 5 {
+		println("T.Len", T.Len(t))
+		panic("fail")
+	}
+	if (*T).Len(&t) != 5 {
+		println("(*T).Len", (*T).Len(&t))
+		panic("fail")
+	}
+	`, "", false},
+	"method embedded": {`
+	type C int
+	func (C) f()  {} // value receiver, direct field of A
+	func (*C) g() {} // pointer receiver
+	type D int
+	func (D) h()  {} // value receiver, indirect field of A
+	func (*D) i() {} // pointer receiver
+	type B struct {
+		C
+		*D
+	}
+	type A struct{ B }
+	var a A
+	// Addressable value receiver.
+	a.f()
+	a.g()
+	a.i()
+	// Non-addressable value receiver.
+	A(a).f()
+	A(a).i()
+	// Pointer receiver.
+	(&a).f()
+	(&a).g()
+	(&a).i()
+	c := new(C)
+	c.f() // makes a copy
+	c.g()
+	`, "", false},
+
+	"method order": {`
+	type T4 struct {
+	}
+	type T3 struct {
+		*T4
+	}
+	type T2 struct {
+		*T3
+	}
+	type T1 struct {
+		T2
+	}
+	func (t4 T4) M(x int, b byte) (byte, int) { return b, x + 40 }
+	func (t4 T4) N(x ...int) (sum int) { 
+		for _, v := range x {
+			sum += v
+		}
+		return
+	}
+	func (t1 T1) N(x ...int) (sum int) { 
+		for _, v := range x {
+			sum -= v
+		}
+		return
+	}
+	t4 := T4{}
+	t3 := T3{&t4}
+	t2 := T2{&t3}
+	t1 := T1{t2}
+	println(t1.N(100,200,300))
+	println(t2.N(100,200,300))
+	println(t3.N(100,200,300))
+	println(t4.N(100,200,300))
+	println(struct{T1}{t1}.N(100,200,300))
+	println(struct{T2}{t2}.N(100,200,300))
+	println(struct{T3}{t3}.N(100,200,300))
+	println(struct{T4}{t4}.N(100,200,300))
+	`, "-600\n600\n600\n600\n-600\n600\n600\n600\n", false},
 }
 
 func TestMethodCases(t *testing.T) {
 	testScripts(t, "TestMethod", testMethodClauses)
+}
+
+func TestBadType(t *testing.T) {
+	cltest.Expect(t, `
+	type M int
+	type M int
+	println(M(10))
+	`, "", nil)
+	cltest.Expect(t, `
+	type M2 M
+	println(M2(10))
+	`, "", nil)
 }
 
 func TestEmbeddedField(t *testing.T) {
@@ -1515,7 +1778,7 @@ func TestEmbeddedField(t *testing.T) {
 	}
 	buf := &Buf{bytes.NewBufferString("hello")}
 	println(buf)
-	`, "&{hello}\n")
+	`, "hello\n")
 	cltest.Expect(t, `
 	import "reflect"
 	type Value struct {
@@ -1524,6 +1787,42 @@ func TestEmbeddedField(t *testing.T) {
 	v := Value{reflect.ValueOf(100)}
 	println(v.Value)
 	`, "100\n")
+	cltest.Expect(t, `
+	type My struct {
+		Position
+	}
+	type Position interface {
+		Pos() (int,int)
+	}
+	type Pos struct {
+		X int
+		Y int
+	}
+	func (p Pos) Pos() (int,int) {
+		return p.X,p.Y
+	}
+	var m My
+	m.Position = &Pos{10,20}
+	println(m.Pos())
+	`, "10 20\n")
+	cltest.Expect(t, `
+	type My struct {
+		Position
+	}
+	type Position interface {
+		Pos() (int,int)
+	}
+	type Pos struct {
+		X int
+		Y int
+	}
+	func (p Pos) Pos() (int,int) {
+		return p.X,p.Y
+	}
+	var m My
+	m.Position1 = &Pos{10,20}
+	println(m.Pos())
+	`, "", "m.Position1 undefined (type main.My has no field or method Position1)")
 }
 
 func TestEmbeddedMethod(t *testing.T) {
@@ -1554,7 +1853,7 @@ func TestEmbeddedMethod(t *testing.T) {
 	buf := Buf{&bytes.Buffer{},1}
 	buf.Write([]byte("hello"))
 	println(buf)
-	`, "{hello 1}\n")
+	`, "hello\n")
 	cltest.Expect(t, `
 	import "reflect"
 	type Value struct {
@@ -1699,58 +1998,20 @@ var testStarExprClauses = map[string]testData{
 				*c.s[0] = 10
 				*c.s[0+0] = 10
 				println(a1, *c.b, *c.m["foo"], *c.s[0], *c.s[0+0])
-
 					`, "3 3 8 10 10\n", false},
 	"star expr exec": {`
-					func A(a *int, c *struct {
-						b *int
-						m map[string]*int
-						s []*int
-					}) {
-						*a = 5
-						*c.b = 3
-						*c.m["foo"] = 7
-						*c.s[0] = 9
-					}
-	
-					func main() {
-						a1 := 6
-						a2 := 6
-						a3 := 6
-						c := struct {
-							b *int
-							m map[string]*int
-							s []*int
-						}{
-							b: &a1,
-							m: map[string]*int{
-								"foo": &a2,
-							},
-							s: []*int{&a3},
-						}
-						A(&a1, &c)
-						*c.m["foo"] = 8
-						*c.s[0] = 10
-						*c.s[0+0] = 10
-						println(a1, *c.b, *c.m["foo"], *c.s[0], *c.s[0+0])
-					}
-						`, "3 3 8 10 10\n", false},
-	"star expr lhs slice index func": {`
-					func A(a *int, c *struct {
-						b *int
-						m map[string]*int
-						s []*int
-					}) {
-						*a = 5
-						*c.b = 3
-						*c.m["foo"] = 7
-						*c.s[0] = 9
-					}
-					
-					func Index() int {
-						return 0
-					}
-					
+				func A(a *int, c *struct {
+					b *int
+					m map[string]*int
+					s []*int
+				}) {
+					*a = 5
+					*c.b = 3
+					*c.m["foo"] = 7
+					*c.s[0] = 9
+				}
+
+				func main() {
 					a1 := 6
 					a2 := 6
 					a3 := 6
@@ -1768,10 +2029,43 @@ var testStarExprClauses = map[string]testData{
 					A(&a1, &c)
 					*c.m["foo"] = 8
 					*c.s[0] = 10
-					*c.s[Index()] = 11
-					println(a1, *c.b, *c.m["foo"], *c.s[0])
-	
-						`, "3 3 8 11\n", false},
+					println(a1, *c.b, *c.m["foo"], *c.s[0], *c.s[0+0])
+				}
+				`, "3 3 8 10 10\n", false},
+	"star expr lhs slice index func": {`
+				func A(a *int, c *struct {
+					b *int
+					m map[string]*int
+					s []*int
+				}) {
+					*a = 5
+					*c.b = 3
+					*c.m["foo"] = 7
+					*c.s[0] = 9
+				}
+				func Index() int {
+					return 0
+				}
+				a1 := 6
+				a2 := 6
+				a3 := 6
+				c := struct {
+					b *int
+					m map[string]*int
+					s []*int
+				}{
+					b: &a1,
+					m: map[string]*int{
+						"foo": &a2,
+					},
+					s: []*int{&a3},
+				}
+				A(&a1, &c)
+				*c.m["foo"] = 8
+				*c.s[0] = 10
+				*c.s[Index()] = 11
+				println(a1, *c.b, *c.m["foo"], *c.s[0])
+				`, "3 3 8 11\n", false},
 	"start expr ptr conv": {`
 					a := 10
 					println(*(*int)(&a))
@@ -2154,4 +2448,521 @@ func TestBadUnsafe(t *testing.T) {
 	v := unsafe.Offsetof(1)
 	println(v)
 	`, "", "invalid expression unsafe.Offsetof(1)")
+}
+
+func TestInterface(t *testing.T) {
+	cltest.Expect(t, `
+	import (
+		"log"
+		"bytes"
+	)
+	type Logger interface {
+		Printf(fmt string, v ...interface{}) 
+	}
+	var buf bytes.Buffer
+	var i Logger = log.New(&buf,"",0)
+	i.Printf("%v-%v-%v",100,nil,200)
+	println(buf.String())
+	`, "100--200\n\n")
+	cltest.Expect(t, `
+	import (
+		"fmt"
+		"sync"
+	)
+	type Map interface {
+		Load(key interface{}) (value interface{}, ok bool)
+		Store(key, value interface{})
+	}
+	var m Map = new(sync.Map)
+	m.Store(1, 123)
+	v, ok := m.Load(1)
+	fmt.Println(v, ok)
+	m.Store(1, nil)
+	v, ok = m.Load(1)
+	fmt.Println(v, ok)
+	m.Store(nil, 123)
+	v, ok = m.Load(nil)
+	fmt.Println(v, ok)
+	`, "123 true\n<nil> true\n123 true\n")
+}
+
+func TestTypeAssert(t *testing.T) {
+	cltest.Expect(t, `
+	func test(v interface{}) {
+		println(v)
+	}
+	test(true)
+	`, "true\n")
+	cltest.Expect(t, `
+	import "bytes"
+	type Stringer interface {
+		String() string
+	}
+	func test(v Stringer) {
+		println(v.String())
+	}
+	buf := bytes.NewBuffer([]byte("hello"))
+	test(buf)
+	`, "hello\n")
+	cltest.Expect(t, `
+	import (
+		"bytes"
+		"fmt"
+	)
+	type B interface {
+		WriteString(s string) (n int, err error)
+	}
+	type T interface {
+		B
+		String() string
+	}
+	b := new(bytes.Buffer)
+	b.WriteString("hello")
+	var t T = b
+	t.WriteString(" world")
+	switch v := t.(type) {
+	case fmt.Stringer:
+		fmt.Println(v)
+	default:
+		fmt.Println("unknown type %T\n",v)
+	}
+	`, "hello world\n")
+	cltest.Expect(t, `
+	import "bytes"
+	type Stringer interface {
+		String() string
+	}
+	func test1(v interface{}) {
+		if s, ok := v.(Stringer); ok {
+			println(s.String())
+		}
+	}
+	func test2(v interface{}) {
+		if s := v.(Stringer); s != nil {
+			println(s.String())
+		}
+	}
+	buf := bytes.NewBuffer([]byte("hello"))
+	test1(buf)
+	test2(buf)
+	`, "hello\nhello\n")
+	cltest.Expect(t, `
+	type Stringer interface {
+		String() string
+	}
+	func test(v interface{}) {
+		if s, ok := v.(Stringer); !ok {
+			println(s)
+		}
+	}
+	test(100)
+	`, "<nil>\n")
+	cltest.Expect(t, `
+	a := 100
+	b := 200
+	i := interface{}(a)
+	println(a == i)
+	println(b == i)
+	`, "true\nfalse\n")
+}
+
+func TestTypeAssertInvalid(t *testing.T) {
+	cltest.Expect(t, `
+	type Stringer interface {
+		String() string
+	}
+	func test(v interface{}) {
+		s := v.(Stringer)
+		println(s)
+	}
+	test(nil)
+	`, "", "interface conversion: interface is nil, not main.Stringer")
+	cltest.Expect(t, `
+	type Stringer interface {
+		String() string
+	}
+	func test(v interface{}) {
+		s := v.(Stringer)
+		println(s)
+	}
+	test(100)
+	`, "", "interface conversion: int is not main.Stringer")
+	cltest.Expect(t, `
+	a := interface{}(100)
+	if v, ok := a.(int); ok {
+		println(v)
+	}
+	`, "100\n")
+	cltest.Expect(t, `
+	a := 100
+	if v, ok := a.(int); ok {
+		println(v)
+	}
+	`, "", "invalid type assertion: a.(int) (non-interface type int on left)")
+}
+
+func TestTypAssertImpossible(t *testing.T) {
+	cltest.Expect(t, `
+	import "bytes"
+	type Stringer interface {
+		String() string
+	}
+	func test(v Stringer) {
+		if _, ok := v.(int); ok {
+			println(v)
+		}
+	}
+	buf := bytes.NewBuffer([]byte("hello"))
+	test(buf)
+	`, "", "impossible type assertion: int does not implement main.Stringer")
+}
+
+var typeAssertCheck = `
+package main
+
+import "os"
+
+var (
+	Bool   int = 0
+	Int    int = 1
+	Float  int = 2
+	String int = 3
+	Struct int = 4
+	Chan   int = 5
+	Array  int = 6
+	Map    int = 7
+	Func   int = 8
+	Last   int = 9
+)
+
+type S struct {
+	a int
+}
+
+var s S = S{1234}
+
+var c = make(chan int)
+
+var a = []int{0, 1, 2, 3}
+
+var m = make(map[string]int)
+
+func assert(b bool, s string) {
+	if !b {
+		println(s)
+		os.Exit(1)
+	}
+}
+
+func f(i int) interface{} {
+	switch i {
+	case Bool:
+		return true
+	case Int:
+		return 7
+	case Float:
+		return 7.4
+	case String:
+		return "hello"
+	case Struct:
+		return s
+	case Chan:
+		return c
+	case Array:
+		return a
+	case Map:
+		return m
+	case Func:
+		return f
+	}
+	panic("bad type number")
+}
+
+func main() {
+	for i := Bool; i < Last; i++ {
+		switch x := f(i).(type) {
+		case bool:
+		//	assert(x == true && i == Bool, "bool")
+		case int:
+			assert(x == 7 && i == Int, "int")
+		case float64:
+			assert(x == 7.4 && i == Float, "float64")
+		case string:
+			assert(x == "hello" && i == String, "string")
+		case S:
+			assert(x.a == 1234 && i == Struct, "struct")
+		case chan int:
+			assert(x == c && i == Chan, "chan")
+		case []int:
+			assert(x[3] == 3 && i == Array, "array")
+		case map[string]int:
+			assert(x != nil && i == Map, "map")
+		case func(i int) interface{}:
+			assert(x != nil && i == Func, "fun")
+		default:
+			assert(false, "unknown")
+		}
+	}
+
+	// boolean switch (has had bugs in past; worth writing down)
+	switch {
+	case true:
+		assert(true, "switch 2 bool")
+	default:
+		assert(false, "switch 2 unknown")
+	}
+
+	switch true {
+	case true:
+		assert(true, "switch 3 bool")
+	default:
+		assert(false, "switch 3 unknown")
+	}
+
+	switch false {
+	case false:
+		assert(true, "switch 4 bool")
+	default:
+		assert(false, "switch 4 unknown")
+	}
+
+	println("hello")
+}
+`
+
+func TestTypeAssertCheck(t *testing.T) {
+	cltest.Expect(t, typeAssertCheck, "hello\n")
+}
+
+func TestLoadType(t *testing.T) {
+	cltest.Expect(t, `
+	type T struct {
+		*T
+	}
+	func (t T) Test1() {
+		println("test1")
+	}	
+	func (t *T) Test2() {
+		println("test2")
+	}
+	var t T
+	t.T = &t
+	t.Test1()
+	t.Test2()
+	`, "test1\ntest2\n")
+	cltest.Expect(t, `
+	type T1 struct {
+		*T2
+	}
+	type T2 struct {
+		*T1
+	}
+	func (t *T1) Test1() {
+		println("test1")
+	}	
+	func (t *T2) Test2() {
+		println("test2")
+	}
+	var t1 T1
+	var t2 T2
+	t1.T2 = &t2
+	t2.T1 = &t1
+	t1.Test1()
+	t1.Test2()
+	t2.Test1()
+	t2.Test2()
+	`, "test1\ntest2\ntest1\ntest2\n")
+	cltest.Expect(t, `
+	type T1 struct {
+		*T2
+	}
+	type T2 struct {
+		*T3
+	}
+	type T3 struct {
+		*T4
+	}
+	type T4 struct {
+		T
+	}
+	type T struct {
+	}
+	func (t T) Test1() {
+		println("test1")
+	}	
+	func (t *T) Test2() {
+		println("test2")
+	}
+	t4 := &T4{}
+	t3 := &T3{t4}
+	t2 := &T2{t3}
+	t1 := &T1{t2}
+	t1.Test1()
+	t1.Test2()
+	`, "test1\ntest2\n")
+	cltest.Expect(t, `
+	type T struct {
+		a []T
+		p []*T
+		m map[int]*T
+	}
+	func (t T) Test1() {
+		println("test1")
+	}	
+	func (t *T) Test2() {
+		println("test2")
+	}
+	var t T
+	t.a = append(t.a,t)
+	t.p = append(t.p,&t)
+	t.m = make(map[int]*T)
+	t.m[1] = &t
+	t.a[0].Test1()
+	t.a[0].Test2()
+	t.p[0].Test1()
+	t.p[0].Test2()
+	t.m[1].Test1()
+	t.m[1].Test2()
+	`, "test1\ntest2\ntest1\ntest2\ntest1\ntest2\n")
+}
+
+var testTypedConstCheck = `true main.Bool
+1 main.Int
+8 main.Int8
+16 main.Int16
+32 main.Int32
+64 main.Int64
+1 main.Uint
+8 main.Uint8
+16 main.Uint16
+32 main.Uint32
+64 main.Uint64
+4097 main.Uintptr
+99 main.Byte
+20013 main.Rune
+s main.String
+32 main.Float32
+64 main.Float64
+(1+64i) main.Complex64
+(1+128i) main.Complex128
+2 main.Int
+`
+
+func TestTypedConst(t *testing.T) {
+	cltest.Expect(t, `
+	type Bool bool
+	type Int int
+	type Int8 int8
+	type Int16 int16
+	type Int32 int32
+	type Int64 int64
+	type Uint uint
+	type Uint8 uint8
+	type Uint16 uint16
+	type Uint32 uint32
+	type Uint64 uint64
+	type Uintptr uintptr
+	type Byte byte
+	type Rune rune
+	type String string
+	type Float32 float32
+	type Float64 float64
+	type Complex64 complex64
+	type Complex128 complex128
+	const (
+		b    Bool       = true
+		i    Int        = 1
+		i8   Int8       = 8
+		i16  Int16      = 16
+		i32  Int32      = 32
+		i64  Int64      = 64
+		u    Uint       = 1
+		u8   Uint8      = 8
+		u16  Uint16     = 16
+		u32  Uint32     = 32
+		u64  Uint64     = 64
+		uptr Uintptr    = 0x1001
+		s    String     = "s"
+		c    Byte       = 'c'
+		r    Rune       = '中'
+		f32  Float32    = 32
+		f64  Float64    = 64
+		c64  Complex64  = 1 + 64i
+		c128 Complex128 = 1 + 128i
+		i2              = Int(2)
+	)
+	printf("%v %T\n", b, b)
+	printf("%v %T\n", i, i)
+	printf("%v %T\n", i8, i8)
+	printf("%v %T\n", i16, i16)
+	printf("%v %T\n", i32, i32)
+	printf("%v %T\n", i64, i64)
+	printf("%v %T\n", u, u)
+	printf("%v %T\n", u8, u8)
+	printf("%v %T\n", u16, u16)
+	printf("%v %T\n", u32, u32)
+	printf("%v %T\n", u64, u64)
+	printf("%v %T\n", uptr, uptr)
+	printf("%v %T\n", c, c)
+	printf("%v %T\n", r, r)
+	printf("%v %T\n", s, s)
+	printf("%v %T\n", f32, f32)
+	printf("%v %T\n", f64, f64)
+	printf("%v %T\n", c64, c64)
+	printf("%v %T\n", c128, c128)
+	printf("%v %T\n", i2, i2)
+	`, testTypedConstCheck)
+}
+
+var testTypedBasicCheck = `100 200 30 50
+100 200 30 50
+-101 -201 -31 -51
+300 80 130 250
+-101 99 69 69
+330 180 330 180
+false true true true false false
+false true false true false true
+`
+
+func TestTypedBasic(t *testing.T) {
+	cltest.Expect(t, `
+	type T int
+	func (t T) Value() int {
+		return int(t)
+	}
+	const (
+		a  T = 10
+		b    = T(20)
+		c1   = a + b
+		c2   = c1 + 20
+	)
+	const (
+		d1 = a == b
+		d2 = a != b
+		d3 = a < b
+		d4 = a <= b
+		d5 = a > b
+		d6 = a >= b
+	)
+	var (
+		v1 T = 100
+		v2   = T(200)
+	)
+	var (
+		e1 = v1 == v2
+		e2 = v1 != v2
+		e3 = c1 == c2
+		e4 = c1 != c2
+		e5 = v1 == c1
+		e6 = v1 != c1
+	)
+	println(v1, v2, c1, c2)
+	println(v1.Value(), v2.Value(), c1.Value(), c2.Value())
+	println(^v1, ^v2, ^c1, ^c2)
+	println(v1+v2, c1+c2, v1+c1, c2+v2)
+	println(v1+^v2, ^v1+v2, v1+^c1, ^c1+v1)
+	println(v1+v2+c1, v1+c1+c2, c1+v1+v2, c1+c2+v1)
+	println(d1, d2, d3, d4, d5, d6)
+	println(e1, e2, e3, e4, e5, e6)
+	`, testTypedBasicCheck)
 }

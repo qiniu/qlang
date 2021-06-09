@@ -5,7 +5,6 @@ import (
 
 	"github.com/goplus/gop/exec.spec"
 	"github.com/qiniu/x/errors"
-	"github.com/qiniu/x/log"
 )
 
 // -----------------------------------------------------------------------------
@@ -52,9 +51,7 @@ func (p *iFuncInfo) Vargs(in ...reflect.Type) exec.FuncInfo {
 
 // Return sets return types of a Go+ function.
 func (p *iFuncInfo) Return(out ...exec.Var) exec.FuncInfo {
-	if p.vlist != nil {
-		log.Panicln("don't call DefineVar before calling Return.")
-	}
+	p.vlist = nil
 	p.addVars(out...)
 	p.numOut = len(out)
 	return p
@@ -450,6 +447,12 @@ func (p *iBuilder) TypeCast(from, to reflect.Type) exec.Builder {
 	return p
 }
 
+// TypeAssert instr
+func (p *iBuilder) TypeAssert(from, to reflect.Type, twoValue bool) exec.Builder {
+	((*Builder)(p)).TypeAssert(from, to, twoValue)
+	return p
+}
+
 // GoBuiltin instr
 func (p *iBuilder) GoBuiltin(typ reflect.Type, op exec.GoBuiltin) exec.Builder {
 	((*Builder)(p)).GoBuiltin(typ, op)
@@ -515,6 +518,11 @@ func (p *iBuilder) DefineBlock() exec.Builder {
 
 // EndBlock
 func (p *iBuilder) EndBlock() exec.Builder {
+	return p
+}
+
+func (p *iBuilder) MethodOf(typ reflect.Type, infos []*exec.MethodInfo) exec.Builder {
+	((*Builder)(p)).MethodOf(typ, infos)
 	return p
 }
 
