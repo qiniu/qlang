@@ -24,6 +24,7 @@ import (
 	"github.com/goplus/gop/ast"
 	"github.com/goplus/gop/ast/astutil"
 	"github.com/goplus/gop/exec.spec"
+	"github.com/goplus/gop/exec/bytecode"
 	"github.com/goplus/gop/token"
 	"github.com/qiniu/x/ctype"
 	"github.com/qiniu/x/errors"
@@ -96,11 +97,55 @@ func compileExpr(ctx *blockCtx, expr ast.Expr) func() {
 		return compileEllipsis(ctx, v)
 	case *ast.StarExpr:
 		return compileStarExpr(ctx, v)
+	case *ast.InterfaceType:
+		return compileInterfaceType(ctx, v)
+	case *ast.StructType:
+		return compileStructType(ctx, v)
+	case *ast.TypeAssertExpr:
+		return compileTypeAssertExpr(ctx, v, false)
+	case *ast.TwoValueTypeAssertExpr:
+		return compileTypeAssertExpr(ctx, v.TypeAssertExpr, true)
 	case *ast.KeyValueExpr:
 		panic("compileExpr: ast.KeyValueExpr unexpected")
 	default:
 		log.Panicln("compileExpr failed: unknown -", reflect.TypeOf(v))
 		return nil
+	}
+}
+
+func compileInterfaceType(ctx *blockCtx, v *ast.InterfaceType) func() {
+	typ := toInterfaceType(ctx, v).(reflect.Type)
+	pkg := bytecode.FindGoPackage(typ.PkgPath())
+	registerInterface(pkg.(*bytecode.GoPackage), typ)
+	ctx.infer.Push(&nonValue{typ})
+	return nil
+}
+
+func compileStructType(ctx *blockCtx, v *ast.StructType) func() {
+	typ := toStructType(ctx, v).(reflect.Type)
+	ctx.infer.Push(&nonValue{typ})
+	return nil
+}
+
+func compileTypeAssertExpr(ctx *blockCtx, v *ast.TypeAssertExpr, twoValue bool) func() {
+	exprX := compileExpr(ctx, v.X)
+	xtyp := ctx.infer.Pop().(iValue).Type()
+	typ := toType(ctx, v.Type).(reflect.Type)
+	if xtyp.Kind() != reflect.Interface {
+		log.Panicf("invalid type assertion: %v.(%v) (non-interface type %v on left)", ctx.code(v.X), typ, xtyp)
+	}
+	if (xtyp.NumMethod() != 0) && typ.Kind() != reflect.Interface {
+		if !typ.Implements(xtyp) {
+			log.Panicf("impossible type assertion: %v does not implement %v", typ, xtyp)
+		}
+	}
+	ctx.infer.Push(&goValue{t: typ})
+	if twoValue {
+		ctx.infer.Push(&goValue{t: exec.TyBool})
+	}
+	return func() {
+		exprX()
+		ctx.out.TypeAssert(xtyp, typ, twoValue)
 	}
 }
 
@@ -585,8 +630,12 @@ func compileConst(ctx *blockCtx, kind astutil.ConstKind, n interface{}) func() {
 func pushConstVal(b exec.Builder, c *constVal) {
 	c.reserve = b.Reserve()
 	if isConstBound(c.kind) {
-		v := boundConst(c.v, exec.TypeFromKind(c.kind))
-		c.reserve.Push(b, v)
+		if c.kind == reflect.Interface && c.v == nil {
+			c.reserve.Push(b, nil)
+		} else {
+			v := boundConst(c.v, exec.TypeFromKind(c.kind))
+			c.reserve.Push(b, v)
+		}
 	}
 }
 
@@ -725,7 +774,6 @@ func compileBinaryExpr(ctx *blockCtx, v *ast.BinaryExpr) func() {
 			}
 			kind = xcons.kind
 		}
-
 		checkBinaryOp(kind, op, x, y, ctx.out)
 		if err := checkOpMatchType(op, x, y); err != nil {
 			log.Panicf("invalid operator: %v (%v)", ctx.code(v), err)
@@ -744,6 +792,11 @@ func binaryOpResult(op exec.Operator, x, y interface{}) (exec.Kind, iValue) {
 		log.Panicln("binaryOp: argument isn't an expr.")
 	}
 	kind := vx.Kind()
+	ykind := vy.Kind()
+	if (op >= exec.OpEQ && op <= exec.OpNENil) &&
+		(kind == reflect.Interface || ykind == reflect.Interface) {
+		return reflect.Interface, &goValue{t: exec.TyBool}
+	}
 	if !isConstBound(kind) {
 		kind = vy.Kind()
 		if xlsh, xok := x.(*lshValue); xok {
@@ -821,33 +874,10 @@ func compileCallExprCall(ctx *blockCtx, exprFun func(), v *ast.CallExpr, ct call
 			ctx.infer.Push(ret)
 		}
 		return func() {
-			var isMethod int
-			if vfn.recv != nil {
-				isMethod = 1
-				exprX := compileExpr(ctx, v.Fun.(*ast.SelectorExpr).X)
-				recv := ctx.infer.Get(-1).(*goValue)
-
-				if astutil.ToRecv(vfn.recv).Pointer == 0 {
-					exprX()
-					if recv.Kind() == reflect.Ptr {
-						recv.t = recv.t.Elem()
-						ctx.infer.Ret(1, recv)
-						ctx.out.AddrOp(recv.t.Kind(), exec.OpAddrVal) // Ptr => Elem()
-					}
-				} else {
-					ctx.checkLoadAddr = true
-					exprX()
-					ctx.checkLoadAddr = false
-					if recv.Kind() != reflect.Ptr {
-						recv.t = reflect.PtrTo(recv.t)
-						ctx.infer.Ret(1, recv)
-					}
-				}
-			}
 			for _, arg := range v.Args {
 				compileExpr(ctx, arg)()
 			}
-			arity := checkFuncCall(vfn.Proto(), isMethod, v, ctx)
+			arity := checkFuncCall(vfn.Proto(), 0, v, ctx)
 			fun := vfn.FuncInfo()
 			if fun.IsVariadic() {
 				builder(ctx, ct).CallFuncv(fun, len(v.Args), arity)
@@ -1240,7 +1270,7 @@ func compileSelectorExprLHS(ctx *blockCtx, v *ast.SelectorExpr, mode compileMode
 	case *goValue:
 		_, t := countPtr(vx.t)
 		name := v.Sel.Name
-		if t.PkgPath() != "" && ast.IsExported(name) || t.PkgPath() == "" {
+		if t.PkgPath() != "" && ast.IsExported(name) || isUserStruct(t) {
 			if t.Kind() == reflect.Struct {
 				if sf, ok := t.FieldByName(name); ok {
 					typ := sf.Type
@@ -1265,6 +1295,8 @@ func compileSelectorExprLHS(ctx *blockCtx, v *ast.SelectorExpr, mode compileMode
 					} else {
 						ctx.out.StoreField(fieldStructType, fieldIndex)
 					}
+				} else {
+					log.Panicf("%v undefined (type %v has no field or method %v)", ctx.code(v), t, name)
 				}
 			}
 		} else if t.PkgPath() != "" && !ast.IsExported(name) {
@@ -1309,7 +1341,44 @@ func funcToClosure(ctx *blockCtx, fun ast.Expr, ftyp *ast.FuncType) *funcDecl {
 		call.Ellipsis++
 	}
 	var body *ast.BlockStmt
-	if typ.Results == nil {
+	if typ.Results == nil || len(typ.Results.List) == 0 {
+		body = &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}}
+	} else {
+		body = &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Return: fun.Pos(), Results: []ast.Expr{call}}}}
+	}
+	funCtx := newExecBlockCtx(ctx)
+	return newFuncDecl("", nil, typ, body, funCtx)
+}
+
+func methodToClosure(ctx *blockCtx, sel *ast.Ident, ftyp *ast.FuncType) *funcDecl {
+	typ := &ast.FuncType{Params: &ast.FieldList{}, Results: ftyp.Results}
+	var args []ast.Expr
+	var ellipsis bool
+	for i, field := range ftyp.Params.List {
+		if _, ok := field.Type.(*ast.Ellipsis); ok {
+			ellipsis = true
+		}
+		if field.Names != nil {
+			for _, name := range field.Names {
+				args = append(args, name)
+			}
+			typ.Params.List = append(typ.Params.List, field)
+		} else {
+			ident := &ast.Ident{Name: strconv.Itoa(i)}
+			args = append(args, ident)
+			typ.Params.List = append(typ.Params.List, &ast.Field{
+				Names: []*ast.Ident{ident},
+				Type:  field.Type,
+			})
+		}
+	}
+	fun := &ast.SelectorExpr{X: args[0], Sel: sel}
+	call := &ast.CallExpr{Fun: fun, Args: args[1:]}
+	if ellipsis {
+		call.Ellipsis++
+	}
+	var body *ast.BlockStmt
+	if typ.Results == nil || len(typ.Results.List) == 0 {
 		body = &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}}
 	} else {
 		body = &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Return: fun.Pos(), Results: []ast.Expr{call}}}}
@@ -1336,22 +1405,45 @@ func findUserStructAnonymous(ctx *blockCtx, t reflect.Type, name string) []strin
 		sf := t.Field(i)
 		if sf.Anonymous {
 			var found bool
-			if isUserStruct(sf.Type) {
-				_, found = ctx.findMethod(sf.Type, name)
-				if !found {
-					if names := findUserStructAnonymous(ctx, sf.Type, name); names != nil {
-						return append([]string{sf.Name}, names...)
-					}
-				}
-			} else {
-				_, found = sf.Type.MethodByName(name)
+			// if isUserStruct(sf.Type) {
+			// 	_, found = ctx.findMethod(sf.Type, name)
+			// 	if !found {
+			// 		if names := findUserStructAnonymous(ctx, sf.Type, name); names != nil {
+			// 			return append([]string{sf.Name}, names...)
+			// 		}
+			// 	}
+			// } else {
+			_, found = sf.Type.MethodByName(name)
+			if !found && sf.Type.Kind() != reflect.Ptr {
+				_, found = reflect.PtrTo(sf.Type).MethodByName(name)
 			}
+			// }
 			if found {
 				return []string{sf.Name}
 			}
 		}
 	}
 	return nil
+}
+
+func findUserStructAnonymousMethod(ctx *blockCtx, t reflect.Type, name string) (typ reflect.Type, found bool) {
+	for i := 0; i < t.NumField(); i++ {
+		sf := t.Field(i)
+		if sf.Anonymous {
+			_, found = sf.Type.MethodByName(name)
+			if found {
+				return sf.Type, found
+			}
+			if sf.Type.Kind() != reflect.Ptr {
+				ptyp := reflect.PtrTo(sf.Type)
+				_, found = ptyp.MethodByName(name)
+				if found {
+					return ptyp, found
+				}
+			}
+		}
+	}
+	return
 }
 
 func compileSelectorExpr(ctx *blockCtx, call *ast.CallExpr, v *ast.SelectorExpr, compileByCallExpr bool) func() {
@@ -1420,6 +1512,60 @@ func compileSelectorExpr(ctx *blockCtx, call *ast.CallExpr, v *ast.SelectorExpr,
 			default:
 				log.Panicln("compileSelectorExpr: unknown GoPackage symbol kind -", kind)
 			}
+		case reflect.Type:
+			name := v.Sel.Name
+			_, t := countPtr(nv)
+			method, ptr, ok := findMethod(t, nv.Kind() == reflect.Ptr, name)
+			if !ok {
+				log.Panicf("%v undefined (type %v has no method %s)", ctx.code(call.Fun), ctx.code(v.X), name)
+			}
+			// unamed struct
+			if t.Kind() == reflect.Struct && t.Name() == "" {
+				if ft, ok := findUserStructAnonymousMethod(ctx, t, name); ok {
+					t = ft
+				}
+			}
+			pkg := bytecode.FindGoPackage(t.PkgPath())
+			if pkg == nil {
+				log.Panicln("package not found -", t.PkgPath())
+			}
+			tname := t.Name()
+			if tname == "" {
+				tname = t.String()
+			}
+			var fnname string
+			if ptr {
+				fnname = "(*" + tname + ")." + name
+			} else {
+				fnname = "(" + tname + ")." + name
+			}
+			addr, kind, ok := pkg.Find(fnname)
+			if !ok {
+				log.Panicln("method not found -", fnname)
+			}
+			if compileByCallExpr {
+				fn := newGoFunc(addr, kind, 0, ctx)
+				if nv.Kind() != reflect.Interface {
+					if fn.t.In(0).Kind() != reflect.Ptr && method.Type.In(0).Kind() == reflect.Ptr {
+						call.Args[0] = &ast.StarExpr{X: call.Args[0]}
+					}
+				}
+				ctx.infer.Ret(1, fn)
+				return nil
+			} else {
+				ctx.infer.Pop()
+				fn := newGoFunc(addr, kind, 0, ctx)
+				if nv.Kind() != reflect.Interface {
+					fn.t = method.Type
+				}
+				ftyp := astutil.FuncType(fn.t)
+				decl := methodToClosure(ctx, v.Sel, ftyp)
+				ctx.use(decl)
+				ctx.infer.Push(newQlFunc(decl))
+				return func() {
+					ctx.out.GoClosure(decl.fi)
+				}
+			}
 		default:
 			log.Panicln("compileSelectorExpr: unknown nonValue -", reflect.TypeOf(nv))
 		}
@@ -1427,65 +1573,33 @@ func compileSelectorExpr(ctx *blockCtx, call *ast.CallExpr, v *ast.SelectorExpr,
 		n, t := countPtr(vx.t)
 		autoCall := false
 		name := v.Sel.Name
-		if t.PkgPath() != "" && ast.IsExported(name) || t.PkgPath() == "" {
-			if t.Kind() == reflect.Struct {
-				if sf, ok := t.FieldByName(name); ok {
-					ctx.infer.Ret(1, &goValue{t: sf.Type})
-					if ctx.fieldIndex == nil {
-						ctx.fieldExprX = exprX
-						ctx.fieldStructType = vx.t
-					}
-					ctx.fieldIndex = append(ctx.fieldIndex, sf.Index...)
-					fieldIndex := ctx.fieldIndex
-					fieldExprX := ctx.fieldExprX
-					fieldStructType := ctx.fieldStructType
-					return func() {
-						if fieldExprX != nil {
-							fieldExprX()
-						}
-						if ctx.takeAddr || ctx.checkLoadAddr {
-							ctx.out.AddrField(fieldStructType, fieldIndex)
-						} else {
-							ctx.out.LoadField(fieldStructType, fieldIndex)
-						}
-					}
+		if t.Kind() == reflect.Struct {
+			if sf, ok := t.FieldByName(name); ok {
+				ctx.infer.Ret(1, &goValue{t: sf.Type})
+				if ctx.fieldIndex == nil {
+					ctx.fieldExprX = exprX
+					ctx.fieldStructType = vx.t
 				}
-			}
-			if fDecl, ok := ctx.findMethod(t, name); ok {
-				if compileByCallExpr {
-					ctx.infer.Pop()
-					fn := newQlFunc(fDecl)
-					ctx.use(fDecl)
-					ctx.infer.Push(fn)
-					return nil
-				} else {
-					ctx.infer.Pop()
-					decl := funcToClosure(ctx, v, fDecl.typ)
-					ctx.use(decl)
-					ctx.infer.Push(newQlFunc(decl))
-					return func() {
-						ctx.out.GoClosure(decl.fi)
+				ctx.fieldIndex = append(ctx.fieldIndex, sf.Index...)
+				fieldIndex := ctx.fieldIndex
+				fieldExprX := ctx.fieldExprX
+				fieldStructType := ctx.fieldStructType
+				return func() {
+					if fieldExprX != nil {
+						fieldExprX()
 					}
-				}
-			}
-			if call != nil && isUserStruct(t) {
-				if names := findUserStructAnonymous(ctx, t, name); names != nil {
-					ctx.infer.Pop()
-					x := &ast.SelectorExpr{X: v.X}
-					for i := 0; i < len(names)-1; i++ {
-						x.X = &ast.SelectorExpr{X: x.X, Sel: &ast.Ident{Name: names[i]}}
+					if ctx.takeAddr || ctx.checkLoadAddr {
+						ctx.out.AddrField(fieldStructType, fieldIndex)
+					} else {
+						ctx.out.LoadField(fieldStructType, fieldIndex)
 					}
-					x.Sel = &ast.Ident{Name: names[len(names)-1]}
-					fun := &ast.SelectorExpr{X: x, Sel: v.Sel}
-					call.Fun = fun
-					return compileSelectorExpr(ctx, call, fun, compileByCallExpr)
 				}
 			}
 		}
-		_, toptr, ok := findMethod(t, name)
+		_, toptr, ok := findMethod(t, n > 0, name)
 		if !ok && isLower(name) {
 			name = strings.Title(name)
-			if _, toptr, ok = findMethod(t, name); ok {
+			if _, toptr, ok = findMethod(t, n > 0, name); ok {
 				v.Sel.Name = name
 				autoCall = !compileByCallExpr
 			}
@@ -1501,14 +1615,31 @@ func compileSelectorExpr(ctx *blockCtx, call *ast.CallExpr, v *ast.SelectorExpr,
 		if pkg == nil {
 			log.Panicln("compileSelectorExpr failed: package not found -", pkgPath)
 		}
+		tname := t.Name()
+		if tname == "" {
+			tname = t.String()
+		}
 		var fnname string
 		if toptr {
-			fnname = "(*" + t.Name() + ")." + name
+			fnname = "(*" + tname + ")." + name
 		} else {
-			fnname = "(" + t.Name() + ")." + name
+			fnname = "(" + tname + ")." + name
 		}
 		addr, kind, ok := pkg.Find(fnname)
 		if !ok {
+			if names := findUserStructAnonymous(ctx, t, name); names != nil {
+				ctx.infer.Pop()
+				x := &ast.SelectorExpr{X: v.X}
+				for i := 0; i < len(names)-1; i++ {
+					x.X = &ast.SelectorExpr{X: x.X, Sel: &ast.Ident{Name: names[i]}}
+				}
+				x.Sel = &ast.Ident{Name: names[len(names)-1]}
+				fun := &ast.SelectorExpr{X: x, Sel: v.Sel}
+				if call != nil {
+					call.Fun = fun
+				}
+				return compileSelectorExpr(ctx, call, fun, compileByCallExpr)
+			}
 			log.Panicln("compileSelectorExpr: method not found -", fnname)
 		}
 		if !compileByCallExpr && !autoCall {
@@ -1578,12 +1709,21 @@ func countPtr(t reflect.Type) (int, reflect.Type) {
 	return n, t
 }
 
-func findMethod(t reflect.Type, name string) (method reflect.Method, toptr bool, found bool) {
-	method, found = t.MethodByName(name)
-	if !found && t.Kind() == reflect.Struct {
-		t = reflect.PtrTo(t)
-		toptr = true
-		method, found = t.MethodByName(name)
+func findMethod(t reflect.Type, ptr bool, name string) (method reflect.Method, toptr bool, ok bool) {
+	if ptr {
+		if method, ok = reflect.PtrTo(t).MethodByName(name); !ok {
+			return
+		}
+		if _, found := t.MethodByName(name); !found {
+			toptr = true
+		}
+	} else {
+		if method, ok = t.MethodByName(name); ok {
+			return
+		}
+		if method, ok = reflect.PtrTo(t).MethodByName(name); ok {
+			toptr = true
+		}
 	}
 	return
 }

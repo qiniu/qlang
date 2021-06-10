@@ -39,6 +39,7 @@ const (
 	bitsAssignOp   = 4
 	bitsIndexOp    = 2
 	bitsIsPtr      = 2
+	bitsTwoValue   = 2
 
 	bitsOpShift = bitsInstr - bitsOp
 	bitsOperand = (1 << bitsOpShift) - 1
@@ -48,6 +49,9 @@ const (
 
 	bitsOpZeroShift   = bitsInstr - (bitsOp + bitsIsPtr)
 	bitsOpZeroOperand = (1 << bitsOpZeroShift) - 1
+
+	bitsOpTypeAssertShift        = bitsInstr - (bitsOp + bitsTwoValue)
+	bitsOpTypeAssertShiftOperand = (1 << bitsOpTypeAssertShift) - 1
 
 	bitsOpInt        = bitsOp + bitsIntKind
 	bitsOpIntShift   = bitsInstr - bitsOpInt
@@ -131,6 +135,8 @@ const (
 	opStruct        = 50 // funvArity(10) type(16)
 	opSend          = 51 // reserved(26)
 	opRecv          = 52 // reserved(26)
+	opTypeAssert    = 53 // twoValue(2) type(24)
+	opTypeMethod    = 54 // type(26)
 )
 
 const (
@@ -223,27 +229,30 @@ var instrInfos = []InstrInfo{
 	opStruct:        {"struct", "funvArity", "type", (10 << 8) | 16},      // funvArity(10) type(16)
 	opSend:          {"send", "", "", 0},                                  // reserved(26)
 	opRecv:          {"recv", "", "", 0},                                  // reserved(26)
+	opTypeAssert:    {"typeAssert", "twoValue", "type", (2 << 8) | 24},    // type(26)
+	opTypeMethod:    {"typeMethod", "", "type", 26},                       // type(26)
 }
 
 // -----------------------------------------------------------------------------
 
 // A Code represents generated instructions to execute.
 type Code struct {
-	data       []Instr
-	valConsts  []interface{}
-	funs       []*FuncInfo
-	funvs      []*FuncInfo
-	comprehens []*Comprehension
-	fors       []*ForPhrase
-	types      []reflect.Type
-	structs    []StructInfo
-	errWraps   []errWrap
+	data        []Instr
+	valConsts   []interface{}
+	funs        []*FuncInfo
+	funvs       []*FuncInfo
+	comprehens  []*Comprehension
+	fors        []*ForPhrase
+	types       []reflect.Type
+	structs     []StructInfo
+	errWraps    []errWrap
+	typeMethods map[reflect.Type][]*exec.MethodInfo
 	varManager
 }
 
 // NewCode returns a new Code object.
 func NewCode() *Code {
-	return &Code{data: make([]Instr, 0, 64)}
+	return &Code{data: make([]Instr, 0, 64), typeMethods: make(map[reflect.Type][]*exec.MethodInfo)}
 }
 
 // Len returns code length.
@@ -329,6 +338,12 @@ func (p *Builder) Reserve() Reserved {
 	idx := len(code.data)
 	code.data = append(code.data, iInvalid)
 	return Reserved(idx)
+}
+
+func (p *Builder) MethodOf(typ reflect.Type, infos []*exec.MethodInfo) {
+	p.code.typeMethods[typ] = infos
+	i := (opTypeMethod << bitsOpShift) | p.requireType(typ)
+	p.code.data = append(p.code.data, i)
 }
 
 // -----------------------------------------------------------------------------

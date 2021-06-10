@@ -96,6 +96,12 @@ type FuncInfo interface {
 	IsUnnamedOut() bool
 }
 
+// FuncInfo represents a Go+ method implement.
+type MethodInfo struct {
+	Info FuncInfo
+	Func func([]reflect.Value) []reflect.Value
+}
+
 // JmpCondFlag represents condition of Jmp intruction.
 type JmpCondFlag uint32
 
@@ -266,6 +272,8 @@ type Builder interface {
 	// DefineType name string,reflect.Typeinstr
 	DefineType(typ reflect.Type, name string) Builder
 
+	MethodOf(typ reflect.Type, infos []*MethodInfo) Builder
+
 	// Return instr
 	Return(n int32) Builder
 
@@ -355,6 +363,9 @@ type Builder interface {
 
 	// TypeCast instr
 	TypeCast(from, to reflect.Type) Builder
+
+	// TypeAssert instr
+	TypeAssert(from, to reflect.Type, twoValue bool) Builder
 
 	// Zero instr
 	Zero(typ reflect.Type) Builder

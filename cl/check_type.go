@@ -121,8 +121,13 @@ func checkBinaryOp(kind exec.Kind, op exec.Operator, x, y interface{}, b exec.Bu
 			if xcons.kind == exec.ConstUnboundPtr {
 				xcons.reserve.Push(b, nil)
 			} else {
-				xv := boundConst(xcons.v, exec.TypeFromKind(kind))
-				xcons.reserve.Push(b, xv)
+				if kind == reflect.Interface {
+					xv := boundConst(xcons.v, xcons.boundType())
+					xcons.reserve.Push(b, xv)
+				} else {
+					xv := boundConst(xcons.v, exec.TypeFromKind(kind))
+					xcons.reserve.Push(b, xv)
+				}
 			}
 		}
 	}
@@ -138,8 +143,13 @@ func checkBinaryOp(kind exec.Kind, op exec.Operator, x, y interface{}, b exec.Bu
 			if ycons.kind == exec.ConstUnboundPtr {
 				ycons.reserve.Push(b, nil)
 			} else {
-				yv := boundConst(ycons.v, exec.TypeFromKind(kind))
-				ycons.reserve.Push(b, yv)
+				if kind == reflect.Interface {
+					yv := boundConst(ycons.v, ycons.boundType())
+					ycons.reserve.Push(b, yv)
+				} else {
+					yv := boundConst(ycons.v, exec.TypeFromKind(kind))
+					ycons.reserve.Push(b, yv)
+				}
 			}
 		}
 	}
@@ -151,6 +161,9 @@ func checkOpMatchType(op exec.Operator, x, y interface{}) error {
 		ix := x.(iValue)
 		iy := y.(iValue)
 		xkind, ykind := ix.Kind(), iy.Kind()
+		if xkind == reflect.Interface || ykind == reflect.Interface {
+			return nil
+		}
 		if xkind == exec.ConstUnboundPtr && ykind == exec.ConstUnboundPtr {
 			return nil
 		} else if xkind == exec.ConstUnboundPtr {
@@ -189,12 +202,18 @@ func checkType(t reflect.Type, v interface{}, b exec.Builder) {
 				log.Panicf("checkType: type `%v` doesn't implments interface `%v`", typVal, t)
 			}
 		} else if t != typVal {
-			if typVal.Kind() == reflect.Chan {
+			switch typVal.Kind() {
+			case reflect.Chan,
+				reflect.Func,
+				reflect.Slice,
+				reflect.Array,
+				reflect.Struct,
+				reflect.Map:
 				if !typVal.ConvertibleTo(t) {
 					log.Panicf("checkType: cannot use `%v` as type `%v` in argument to produce", typVal, t)
 				}
-			} else {
-				log.Panicf("checkType: unexptected value type, require `%v`, but got `%v`\n", t, typVal)
+			default:
+				log.Panicf("checkType: unexptected value type, require `%v(%p)`, but got `%v(%p)`\n", t, t, typVal, typVal)
 			}
 		}
 	}
