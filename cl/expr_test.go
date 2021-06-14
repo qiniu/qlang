@@ -18,6 +18,7 @@ package cl_test
 import (
 	"fmt"
 	"math/big"
+	"strconv"
 	"testing"
 
 	"github.com/goplus/gop/cl/cltest"
@@ -175,7 +176,361 @@ func TestUnboundInt(t *testing.T) {
 	)
 }
 
+func TestComplex2(t *testing.T) {
+	cltest.Expect(t, `
+	const a int = 42+0i
+	println(a)
+	`, "42\n")
+
+	cltest.Expect(t, `
+	const a = 42+1i
+	const b float32 = a-1i
+	println(b)
+	`, "42\n")
+
+	cltest.Expect(t, `
+	const a = 42+1i
+	const b float64 = a-1i
+	println(b)
+	`, "42\n")
+}
+
+func TestConstInitType(t *testing.T) {
+	cltest.Expect(t, `
+	const (
+		a float64 = 1.1
+		b float32 = float32(a)-0.1
+	)
+	println(a,b)
+	`, "1.1 1\n")
+	cltest.Expect(t, `
+	const (
+		a float64 = 1
+		b float32 = a-0.1
+	)
+	println(a,b)
+	`, "", "cannot use a (type float64) as type float32 in const initializer")
+}
+
+func TestConstTyped(t *testing.T) {
+	cltest.Expect(t, `
+	type T uint8
+	const (
+		a T = 1 << iota
+		b
+		c
+	)
+	println(a,b,c)
+	`, "1 2 4\n")
+	cltest.Expect(t, `
+	type T uint8
+	const (
+		a T = 0xff
+		b T = 1
+		c T = a+b
+	)
+	println(a,b,c)
+	`, "", "constant 256 overflows uint8")
+	cltest.Expect(t, `
+	type T int8
+	const (
+		a T = 0x7f
+		b T = 1
+		c T = a+b
+	)
+	println(a,b,c)
+	`, "", "constant 128 overflows int8")
+	cltest.Expect(t, `
+	type T float64
+	const (
+		a T = 1e308
+	)
+	println(a*2)
+	`, "", "constant 2e+308 overflows float64")
+	cltest.Expect(t, `
+	type T complex128
+	const (
+		a T = 1e308+2i
+	)
+	println(a*2)
+	`, "", "constant (2e+308 + 4i) overflows complex128")
+}
+
+func TestConstUnary(t *testing.T) {
+	cltest.Expect(t, `
+	const (
+		a = ^uint8(1)+1
+		b = -int8(1)+128
+		c = -float32(1)+4097
+		d = -complex64(1+2i)+4097
+		e = !!true
+	)
+	printf("%v %T\n",a,a)
+	printf("%v %T\n",b,b)
+	printf("%v %T\n",c,c)
+	printf("%v %T\n",d,d)
+	printf("%v %T\n",e,e)
+	`, "255 uint8\n127 int8\n4096 float32\n(4096-2i) complex64\ntrue bool\n")
+}
+
+func TestConstUbountInt(t *testing.T) {
+	cltest.Expect(t, `
+	const a = 1+3/2
+	println(a)
+	`, "2\n")
+	cltest.Expect(t, `
+	const a = 1.1+3/2
+	println(a)
+	`, "2.1\n")
+	cltest.Expect(t, `
+	const a = (1+2i)+3/2
+	println(a)
+	`, "(2+2i)\n")
+	cltest.Expect(t, `
+	const a = 1/2r+3/2
+	println(a)
+	`, "3/2\n")
+	cltest.Expect(t, `
+	const a = uint8(255)+3/2
+	println(a)
+	`, "", "constant 256 overflows uint8")
+	cltest.Expect(t, `
+	var a = [1]int{}
+	println(a)
+	`, "[0]\n")
+	cltest.Expect(t, `
+	var a = [1.0]int{}
+	println(a)
+	`, "[0]\n")
+	cltest.Expect(t, `
+	const a = int(1)*1e3
+	println(a)
+	`, "1000\n")
+	cltest.Expect(t, `
+	const a = int(1)*1000.1
+	println(a)
+	`, "", "constant 1000.1 truncated to integer")
+	cltest.Expect(t, `
+	const a = 1000.1*int(1)
+	println(a)
+	`, "", "constant 1000.1 truncated to integer")
+	cltest.Expect(t, `
+	var a = [1.1]int{}
+	println(a)
+	`, "", "constant 1.1 truncated to integer")
+	cltest.Expect(t, `
+	const a = 1024 << -1
+	println(a)
+	`, "", "invalid negative shift count: -1")
+	cltest.Expect(t, `
+	const a = (1e4096) >> 10
+	println(a)
+	`, "", "integer too large")
+	cltest.Expect(t, `
+	const a = int(100)/3
+	println(a)`, "33\n")
+}
+
+func TestConstTruncated(t *testing.T) {
+	cltest.Expect(t, `
+	const a int = 1+100.0
+	println(a)
+	`, "101\n")
+	cltest.Expect(t, `
+	const a int = 1+100.1
+	println(a)
+	`, "", "constant 101.1 truncated to integer")
+	cltest.Expect(t, `
+	const a = 1r+100.0
+	println(a)
+	`, "101\n")
+	cltest.Expect(t, `
+	const a = 1r+100.1
+	println(a)
+	`, "", "constant 100.1 truncated to integer")
+	cltest.Expect(t, `
+	const a = 1+1e4096
+	println(a)
+	`, "", "constant 1e+4096 overflows float64")
+	cltest.Expect(t, `
+	const a = 1r+1e4096-1e4096
+	println(a)
+	`, "1\n")
+	cltest.Expect(t, `
+	const a int = 1+0i
+	println(a)
+	`, "1\n")
+	cltest.Expect(t, `
+	const a int = 1+2i
+	println(a)
+	`, "", "constant (1 + 2i) truncated to int")
+}
+
+func TestOverflowsFloat(t *testing.T) {
+	//-3.40282e+38
+	//-1.79769e+308
+	cltest.Expect(t, `
+	const a float32 = 3.40282e+38
+	const b float32 = -3.40282e+38
+	println(a,b)
+	`, "3.40282e+38 -3.40282e+38\n")
+	cltest.Expect(t, `
+	const a float32 = 3.40283e+38
+	println(a)
+	`, "", "constant 3.40283e+38 overflows float32")
+	cltest.Expect(t, `
+	const a float32 = -3.40283e+38
+	println(a)
+	`, "", "constant -3.40283e+38 overflows float32")
+
+	cltest.Expect(t, `
+	const a float64 = 1.79769e+308
+	const b float64 = -1.79769e+308
+	println(a,b)
+	`, "1.79769e+308 -1.79769e+308\n")
+	cltest.Expect(t, `
+	const a float64 = 1.7977e+308
+	println(a)
+	`, "", "constant 1.7977e+308 overflows float64")
+	cltest.Expect(t, `
+	const a float64 = -1.7977e+308
+	println(a)
+	`, "", "constant -1.7977e+308 overflows float64")
+}
+
 func TestOverflowsInt(t *testing.T) {
+	cltest.Expect(t, `
+	const a int8 = 0x7f
+	const b int8 = -0x80
+	println(a,b)
+	`, "127 -128\n")
+	cltest.Expect(t, `
+	const a int8 = 0x7f+1
+	println(a)
+	`, "", "constant 128 overflows int8")
+	cltest.Expect(t, `
+	const a int8 = -0x80-1
+	println(a)
+	`, "", "constant -129 overflows int8")
+
+	cltest.Expect(t, `
+	const a int16 = 0x7fff
+	const b int16 = -0x8000
+	println(a,b)
+	`, "32767 -32768\n")
+	cltest.Expect(t, `
+	const a int16 = 0x7fff+1
+	println(a)
+	`, "", "constant 32768 overflows int16")
+	cltest.Expect(t, `
+	const a int16 = -0x8000-1
+	println(a)
+	`, "", "constant -32769 overflows int16")
+
+	cltest.Expect(t, `
+	const a int32 = 0x7fffffff
+	const b int32 = -0x80000000
+	println(a,b)
+	`, "2147483647 -2147483648\n")
+	cltest.Expect(t, `
+	const a int32 = 0x7fffffff+1
+	println(a)
+	`, "", "constant 2147483648 overflows int32")
+	cltest.Expect(t, `
+	const a int32 = -0x80000000-1
+	println(a)
+	`, "", "constant -2147483649 overflows int32")
+
+	cltest.Expect(t, `
+	const a int64 = 0x7fffffffffffffff
+	const b int64 = -0x8000000000000000
+	println(a,b)
+	`, "9223372036854775807 -9223372036854775808\n")
+	cltest.Expect(t, `
+	const a int64 = 0x7fffffffffffffff+1
+	println(a)
+	`, "", "constant 9223372036854775808 overflows int64")
+	cltest.Expect(t, `
+	const a int64 = -0x8000000000000000-1
+	println(a)
+	`, "", "constant -9223372036854775809 overflows int64")
+}
+
+func TestOverflowsUint(t *testing.T) {
+	cltest.Expect(t, `
+	const a uint8 = 0xfff/0x10
+	const b uint8 = 0xfff-0xf00
+	println(a,b)
+	`, "255 255\n")
+	cltest.Expect(t, `
+	const a uint8 = 0xff+1
+	println(a)
+	`, "", "constant 256 overflows uint8")
+	cltest.Expect(t, `
+	const a uint8 = -1
+	println(a)
+	`, "", "constant -1 overflows uint8")
+	cltest.Expect(t, `
+	const a = -uint8(1)
+	println(a)
+	`, "", "constant -1 overflows uint8")
+
+	cltest.Expect(t, `
+	const a uint16 = 0xffff1/0x10
+	const b uint16 = 0xfffff-0xf0000
+	println(a,b)
+	`, "65535 65535\n")
+	cltest.Expect(t, `
+	const a uint16 = 0xffff+1
+	println(a)
+	`, "", "constant 65536 overflows uint16")
+	cltest.Expect(t, `
+	const a uint16 = -1
+	println(a)
+	`, "", "constant -1 overflows uint16")
+	cltest.Expect(t, `
+	const a = -uint16(1)
+	println(a)
+	`, "", "constant -1 overflows uint16")
+
+	cltest.Expect(t, `
+	const a uint32 = 0xffffffff1/0x10
+	const b uint32 = 0xfffffffff-0xf00000000
+	println(a,b)
+	`, "4294967295 4294967295\n")
+	cltest.Expect(t, `
+	const a uint32 = 0xffffffff+1
+	println(a)
+	`, "", "constant 4294967296 overflows uint32")
+	cltest.Expect(t, `
+	const a uint32 = -1
+	println(a)
+	`, "", "constant -1 overflows uint32")
+	cltest.Expect(t, `
+	const a = -uint32(1)
+	println(a)
+	`, "", "constant -1 overflows uint32")
+
+	cltest.Expect(t, `
+	const a uint64 = 0xffffffffffffffff1/0x10
+	const b uint64 = 0xfffffffffffffffff-0xf0000000000000000
+	println(a,b)
+	`, "18446744073709551615 18446744073709551615\n")
+	cltest.Expect(t, `
+	const a uint64 = 0xffffffffffffffff+1
+	println(a)
+	`, "", "constant 18446744073709551616 overflows uint64")
+	cltest.Expect(t, `
+	const a uint64 = -1
+	println(a)
+	`, "", "constant -1 overflows uint64")
+	cltest.Expect(t, `
+	const a = -uint64(1)
+	println(a)
+	`, "", "constant -1 overflows uint64")
+}
+
+func _TestOverflowsInt(t *testing.T) {
 	cltest.Expect(t, `
 	println(9223372036854775807)
 	`,
@@ -1927,7 +2282,100 @@ func TestTwoValueExpr(t *testing.T) {
 	cltest.Expect(t, clause, "1 3 true\n3 0 false\n")
 }
 
+func TestOpShift(t *testing.T) {
+	cltest.Expect(t, `
+	const u uint32 = 3
+	var a = 1 << u
+	var b = 1024 >> u
+	var c = 1.0 << u
+	var d = 1024.0 >> u
+	printf("%v %T\n",a,a)
+	printf("%v %T\n",b,b)
+	printf("%v %T\n",c,c)
+	printf("%v %T\n",d,d)
+	`, "8 int\n128 int\n8 int\n128 int\n")
+	cltest.Expect(t, `
+	const u uint32 = 3
+	var a = 1 << u
+	var b = 1024 >> u
+	var c int32 = 1.0 << u
+	var d int32 = 1024.0 >> u
+	printf("%v %T\n",a,a)
+	printf("%v %T\n",b,b)
+	printf("%v %T\n",c,c)
+	printf("%v %T\n",d,d)
+	`, "8 int\n128 int\n8 int32\n128 int32\n")
+}
+
+func TestOpRsh(t *testing.T) {
+	cltest.Expect(t, `
+	var a [1024]byte
+	var s uint = 3
+	// The results of the following examples are given for 64-bit ints.
+	var i = 1024>>s                   // 1 has type int
+	var j int32 = 1024>>s             // 1 has type int32; j == 0
+	var k = uint64(1024>>s)           // 1 has type uint64; k == 1<<33
+	var m int = 1024.0>>s             // 1.0 has type int; m == 1<<33
+	var n = 1024.0>>s == j            // 1.0 has type int; n == true
+	var o = 1024>>s == 2048<<s        // 1 and 2 have type int; o == false
+	var p = 1024>>s == 1024>>3        // 1 has type int; p == true
+	var w int64 = 1024.0>>3           // 1.0<<33 is a constant shift expression; w == 1<<33
+	var x = a[1024.0>>s]              // 1.0 has type int
+	var b = make([]byte, 1024.0>>s)   // 1.0 has type int; len(b) == 1024>>3
+	printf("%T %T %T %T %T %T %T %T %T %T\n",i,j,k,m,n,o,p,w,x,b)
+	`, "int int32 uint64 int bool bool bool int64 uint8 []uint8\n")
+	cltest.Expect(t, `
+	func test1(v int) {
+		printf("%T\n",v)
+	}
+	func test2(v int32) {
+		printf("%T\n",v)
+	}
+	func test3(v int64) {
+		printf("%T\n",v)
+	}
+	func test4(fmt string,v ...int32) {
+		printf(fmt,v)
+	}
+	var s uint = 3
+	test1(1024>>s)
+	test2(1024>>s)
+	test3(1024>>s)
+	test4("%T\n",1024>>s)
+	`, "int\nint32\nint64\n[]int32\n")
+	cltest.Expect(t, `
+	var a int
+	var b int32
+	var c int64
+	var s uint = 3
+	a,b,c = 1024>>s,1024>>s,1024>>s
+	printf("%T %T %T\n",a,b,c)
+	`, "int int32 int64\n")
+	cltest.Expect(t, `
+	var s uint = 3
+	var u = 1024.0<<s
+	println(u)
+	`, "", nil)
+	cltest.Expect(t, `
+	var s uint = 3
+	var u1 = 1024.0>>s != 0
+	println(u1)
+	`, "", nil)
+	cltest.Expect(t, `
+	var s uint = 3
+	var v float32 = 1024>>s
+	println(v)
+	`, "", nil)
+	cltest.Expect(t, `
+	var s = 1.1 >> 3
+	println(s)
+	`, "", "constant 1.1 truncated to integer")
+}
+
 func TestOpLsh(t *testing.T) {
+	if strconv.IntSize == 32 {
+		return
+	}
 	cltest.Expect(t, `
 	var a [1024]byte
 	var s uint = 33
@@ -2118,6 +2566,7 @@ func TestUnsafe(t *testing.T) {
 	println(*(*string)(unsafe.Pointer(v2)))
 	println(*(*string)(unsafe.Pointer(v3)))
 	`, "hello\nworld\nworld\nworld\n")
+	size := strconv.IntSize / 8
 	cltest.Expect(t, `
 	import "unsafe"
 	type Point struct {
@@ -2130,7 +2579,7 @@ func TestUnsafe(t *testing.T) {
 	println(unsafe.Alignof(pt))
 	println(unsafe.Offsetof(pt.Y))
 	println(unsafe.Offsetof(pt2.Y))
-	`, "16\n8\n8\n8\n")
+	`, fmt.Sprintf("%v\n%v\n%v\n%v\n", size*2, size, size, size))
 	cltest.Expect(t, `
 	import "unsafe"
 	ar := [unsafe.Sizeof(true)]int{}

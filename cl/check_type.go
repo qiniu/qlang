@@ -109,7 +109,7 @@ func checkFuncArgs(tfn iFuncType, args []interface{}, b exec.Builder) {
 func checkUnaryOp(kind exec.Kind, op exec.Operator, x interface{}, b exec.Builder) {
 	if xcons, xok := x.(*constVal); xok {
 		if xcons.reserve != -1 {
-			xv := boundConst(xcons.v, exec.TypeFromKind(kind))
+			xv := boundConst(xcons, exec.TypeFromKind(kind))
 			xcons.reserve.Push(b, xv)
 		}
 	}
@@ -121,7 +121,7 @@ func checkBinaryOp(kind exec.Kind, op exec.Operator, x, y interface{}, b exec.Bu
 			if xcons.kind == exec.ConstUnboundPtr {
 				xcons.reserve.Push(b, nil)
 			} else {
-				xv := boundConst(xcons.v, exec.TypeFromKind(kind))
+				xv := boundConst(xcons, exec.TypeFromKind(kind))
 				xcons.reserve.Push(b, xv)
 			}
 		}
@@ -138,7 +138,7 @@ func checkBinaryOp(kind exec.Kind, op exec.Operator, x, y interface{}, b exec.Bu
 			if ycons.kind == exec.ConstUnboundPtr {
 				ycons.reserve.Push(b, nil)
 			} else {
-				yv := boundConst(ycons.v, exec.TypeFromKind(kind))
+				yv := boundConst(ycons, exec.TypeFromKind(kind))
 				ycons.reserve.Push(b, yv)
 			}
 		}
@@ -175,8 +175,8 @@ func IsPtrKind(kind reflect.Kind) bool {
 func checkType(t reflect.Type, v interface{}, b exec.Builder) {
 	if cons, ok := v.(*constVal); ok {
 		cons.bound(t, b)
-	} else if lsh, ok := v.(*lshValue); ok {
-		lsh.checkType(t)
+	} else if shv, ok := v.(*shiftValue); ok {
+		shv.checkType(t)
 	} else {
 		iv := v.(iValue)
 		n := iv.NumValues()
@@ -203,8 +203,8 @@ func checkType(t reflect.Type, v interface{}, b exec.Builder) {
 func checkIntType(v interface{}, b exec.Builder) {
 	if cons, ok := v.(*constVal); ok {
 		cons.bound(exec.TyInt, b)
-	} else if lsh, ok := v.(*lshValue); ok {
-		lsh.checkType(exec.TyInt)
+	} else if shv, ok := v.(*shiftValue); ok {
+		shv.checkType(exec.TyInt)
 	} else {
 		iv := v.(iValue)
 		n := iv.NumValues()

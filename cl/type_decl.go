@@ -276,7 +276,8 @@ func toArrayType(ctx *blockCtx, v *ast.ArrayType) iType {
 	compileExpr(ctx, v.Len)
 	n := ctx.infer.Pop()
 	if nv, ok := n.(iValue).(*constVal); ok {
-		if iv, ok := nv.v.(int64); ok {
+		v := boundConst(nv, exec.TyInt)
+		if iv, ok := v.(int); ok {
 			if iv < 0 {
 				return &unboundArrayType{elem: elem.(reflect.Type)}
 			}
@@ -313,11 +314,7 @@ func toInt(ctx *blockCtx, e ast.Expr) int {
 	if !ok {
 		log.Panicln("toInt: require constant expr.")
 	}
-	iv, ok := nv.v.(int64)
-	if !ok {
-		log.Panicln("toInt: constant expr isn't an integer.")
-	}
-	return int(iv)
+	return boundConst(nv, exec.TyInt).(int)
 }
 
 func toStructField(ctx *blockCtx, field *ast.Field) []reflect.StructField {

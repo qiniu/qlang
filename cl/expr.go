@@ -23,6 +23,7 @@ import (
 
 	"github.com/goplus/gop/ast"
 	"github.com/goplus/gop/ast/astutil"
+	"github.com/goplus/gop/constant"
 	"github.com/goplus/gop/exec.spec"
 	"github.com/goplus/gop/token"
 	"github.com/qiniu/x/ctype"
@@ -290,7 +291,7 @@ func compileEllipsis(ctx *blockCtx, v *ast.Ellipsis) func() {
 	if v.Elt != nil {
 		log.Panicln("compileEllipsis: todo")
 	}
-	ctx.infer.Push(&constVal{v: int64(-1), kind: astutil.ConstUnboundInt})
+	ctx.infer.Push(&constVal{v: constant.MakeInt64(-1), kind: astutil.ConstUnboundInt})
 	return nil
 }
 
@@ -585,7 +586,7 @@ func compileConst(ctx *blockCtx, kind astutil.ConstKind, n interface{}) func() {
 func pushConstVal(b exec.Builder, c *constVal) {
 	c.reserve = b.Reserve()
 	if isConstBound(c.kind) {
-		v := boundConst(c.v, exec.TypeFromKind(c.kind))
+		v := boundConst(c, exec.TypeFromKind(c.kind))
 		c.reserve.Push(b, v)
 	}
 }
@@ -623,7 +624,7 @@ func compileUnaryExpr(ctx *blockCtx, v *ast.UnaryExpr) func() {
 	}
 	xcons, xok := x.(*constVal)
 	if xok { // op <const>
-		ret := unaryOp(op, xcons)
+		ret := unaryOp(v.Op, op, xcons)
 		ctx.infer.Ret(1, ret)
 		return func() {
 			ret.reserve = ctx.out.Reserve()
@@ -661,6 +662,22 @@ var unaryOps = [...]exec.Operator{
 	token.XOR: exec.OpBitNot,
 }
 
+func isUnboundNumberType(kind exec.Kind) bool {
+	return kind == exec.ConstUnboundInt ||
+		kind == exec.ConstUnboundFloat ||
+		kind == exec.ConstUnboundComplex
+}
+
+func isBoundNumberType(kind exec.Kind) bool {
+	return kind >= exec.Int && kind <= exec.Complex128
+}
+
+func isCompareToken(op token.Token) bool {
+	return op == token.EQL || op == token.NEQ ||
+		op == token.LSS || op == token.LEQ ||
+		op == token.GTR || op == token.GEQ
+}
+
 func compileBinaryExpr(ctx *blockCtx, v *ast.BinaryExpr) func() {
 	exprX := compileExpr(ctx, v.X)
 	exprY := compileExpr(ctx, v.Y)
@@ -669,26 +686,33 @@ func compileBinaryExpr(ctx *blockCtx, v *ast.BinaryExpr) func() {
 	y := ctx.infer.Get(-1)
 	xcons, xok := x.(*constVal)
 	ycons, yok := y.(*constVal)
+	opShift := (op == exec.OpLsh || op == exec.OpRsh)
 	if xok && yok { // <const> op <const>
-		if op == exec.OpLsh && xcons.kind == exec.ConstUnboundFloat {
-			v := xcons.v.(float64)
-			if v != float64(int64(v)) {
-				log.Panicf("constant %v truncated to integer", v)
-			}
+		if opShift && xcons.kind == exec.ConstUnboundFloat {
+			xcons.v = extractUnboundInt(xcons.v.(constant.Value), xcons.kind)
 			xcons.kind = exec.ConstUnboundInt
 		}
-		ret := binaryOp(op, xcons, ycons)
+		ret := binaryOp(v.Op, op, xcons, ycons)
 		ctx.infer.Ret(2, ret)
 		return func() {
 			ret.reserve = ctx.out.Reserve()
 		}
+	} else if isCompareToken(v.Op) {
+		xkind := x.(iValue).Kind()
+		ykind := y.(iValue).Kind()
+		if xok && isUnboundNumberType(xcons.kind) && isBoundNumberType(ykind) {
+			xcons.kind = ykind
+		} else if yok && isUnboundNumberType(ycons.kind) && isBoundNumberType(xkind) {
+			ycons.kind = xkind
+		}
 	}
+
 	var kind iKind
-	var lsh *lshValue
-	if op == exec.OpLsh && xok && !isConstBound(xcons.kind) {
+	var shift *shiftValue
+	if opShift && xok && !isConstBound(xcons.kind) {
 		kind = xcons.kind
-		lsh = &lshValue{x: xcons, r: exec.InvalidReserved}
-		ctx.infer.Ret(2, lsh)
+		shift = &shiftValue{x: xcons, r: exec.InvalidReserved}
+		ctx.infer.Ret(2, shift)
 	} else {
 		var ret iValue
 		kind, ret = binaryOpResult(op, x, y)
@@ -706,17 +730,17 @@ func compileBinaryExpr(ctx *blockCtx, v *ast.BinaryExpr) func() {
 			}
 		}
 		exprY()
-		if lsh != nil {
+		if shift != nil {
 			if !isConstBound(xcons.kind) {
-				lsh.r = ctx.out.ReserveOpLsh()
-				lsh.fnCheckType = func(typ reflect.Type) {
+				shift.r = ctx.out.ReserveOpShift()
+				shift.fnCheckType = func(typ reflect.Type) {
 					kind := typ.Kind()
-					xcons.v = boundConst(xcons.v, typ)
+					xcons.v = boundConst(xcons, typ)
 					checkBinaryOp(kind, op, x, y, ctx.out)
 					if err := checkOpMatchType(op, x, y); err != nil {
 						log.Panicf("invalid operator: %v (%v)", ctx.code(v), err)
 					}
-					ctx.out.ReservedAsOpLsh(lsh.r, kind, op)
+					ctx.out.ReservedAsOpShift(shift.r, kind, op)
 				}
 				if label != nil {
 					ctx.out.Label(label)
@@ -746,23 +770,23 @@ func binaryOpResult(op exec.Operator, x, y interface{}) (exec.Kind, iValue) {
 	kind := vx.Kind()
 	if !isConstBound(kind) {
 		kind = vy.Kind()
-		if xlsh, xok := x.(*lshValue); xok {
+		if xshv, xok := x.(*shiftValue); xok {
 			var unbound bool
 			if !isConstBound(kind) {
-				if kind != xlsh.Kind() {
+				if kind != xshv.Kind() {
 					unbound = true
 				}
 				if c, ok := y.(*constVal); ok {
 					kind = c.boundKind()
-					c.v = boundConst(c.v, c.boundType())
+					c.v = boundConst(c, c.boundType())
 					c.kind = kind
-				} else if lsh, ok := y.(*lshValue); ok && lsh.Kind() == exec.ConstUnboundInt {
+				} else if shv, ok := y.(*shiftValue); ok && shv.Kind() == exec.ConstUnboundInt {
 					kind = exec.Int
-					lsh.bound(exec.TyInt)
+					shv.bound(exec.TyInt)
 				}
 			}
 			if !unbound {
-				xlsh.bound(vy.Type())
+				xshv.bound(vy.Type())
 			}
 		} else if !isConstBound(kind) {
 			log.Panicln("binaryOp: expect x, y aren't const values either.")
@@ -979,7 +1003,7 @@ func compileIndexExprLHS(ctx *blockCtx, v *ast.IndexExpr, mode compileMode) {
 	switch typ.Kind() {
 	case reflect.Slice, reflect.Array:
 		if cons, ok := i.(*constVal); ok {
-			n := boundConst(cons.v, exec.TyInt)
+			n := boundConst(cons, exec.TyInt)
 			if ctx.indirect {
 				ctx.out.Index(n.(int)).AddrOp(kindOf(typElem), exec.OpAssign)
 			} else {
@@ -1056,15 +1080,15 @@ func compileIdx(ctx *blockCtx, v ast.Expr, nlast int, kind reflect.Kind) int {
 	expr := compileExpr(ctx, v)
 	i := ctx.infer.Pop()
 	if cons, ok := i.(*constVal); ok {
-		nv := boundConst(cons.v, exec.TyInt)
+		nv := boundConst(cons, exec.TyInt)
 		n := nv.(int)
 		if n <= nlast {
 			return n
 		}
 		ctx.out.Push(n)
 		return -1
-	} else if lsh, ok := i.(*lshValue); ok {
-		lsh.bound(exec.TyInt)
+	} else if shv, ok := i.(*shiftValue); ok {
+		shv.bound(exec.TyInt)
 	}
 
 	expr()
@@ -1535,7 +1559,6 @@ func compileSelectorExpr(ctx *blockCtx, call *ast.CallExpr, v *ast.SelectorExpr,
 	default:
 		log.Panicln("compileSelectorExpr failed: unknown -", reflect.TypeOf(vx))
 	}
-	_ = exprX
 	return nil
 }
 
