@@ -26,31 +26,23 @@ import (
 func execLoad(i Instr, p *Context) {
 	idx := int32(i) << bitsOp >> bitsOp
 	index := p.base + int(idx)
-	if p.addrs[index].Kind() == reflect.Struct {
-		p.Push(p.addrs[index].Interface())
-	} else {
-		p.Push(p.data[index])
-	}
+	p.Push(p.args[index].Interface())
 }
 
 func execAddr(i Instr, p *Context) {
 	idx := int32(i) << bitsOp >> bitsOp
 	index := (p.base + int(idx))
-	if p.addrs[index].Kind() == reflect.Struct {
-		p.Push(p.addrs[index].Addr().Interface())
+	if p.args[index].Kind() != reflect.Ptr {
+		p.Push(p.args[index].Addr().Interface())
 	} else {
-		p.Push(p.data[index])
+		p.Push(p.args[index].Interface())
 	}
 }
 
 func execStore(i Instr, p *Context) {
 	idx := int32(i) << bitsOp >> bitsOp
 	index := p.base + int(idx)
-	if p.addrs[index].Kind() == reflect.Struct {
-		p.addrs[index].Set(reflect.ValueOf(p.Pop()))
-	} else {
-		p.data[index] = p.Pop()
-	}
+	p.args[index].Set(reflect.ValueOf(p.Pop()))
 }
 
 const (
@@ -317,7 +309,7 @@ func (p *FuncInfo) execFunc(ctx *Context) {
 }
 
 func (p *FuncInfo) exec(ctx *Context, parent *varScope) {
-	old := ctx.switchScope(parent, &p.varManager)
+	old := ctx.switchScope(parent, &p.varManager, p.in)
 	p.execFunc(ctx)
 	if ctx.ip != ipReturnN {
 		ctx.data = ctx.data[:ctx.base-len(p.in)]
