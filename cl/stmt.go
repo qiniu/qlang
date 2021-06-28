@@ -18,8 +18,10 @@ package cl
 
 import (
 	"reflect"
+	"strconv"
 
 	"github.com/goplus/gop/ast"
+	"github.com/goplus/gop/ast/astutil"
 	"github.com/goplus/gop/exec.spec"
 	"github.com/goplus/gop/token"
 	"github.com/qiniu/x/log"
@@ -28,7 +30,9 @@ import (
 // -----------------------------------------------------------------------------
 
 func compileBlockStmtWith(ctx *blockCtx, body *ast.BlockStmt) {
+	ctx.out.DefineBlock()
 	compileBodyWith(ctx, body.List)
+	ctx.out.EndBlock()
 }
 
 func compileBlockStmtWithout(ctx *blockCtx, body *ast.BlockStmt) {
@@ -38,9 +42,7 @@ func compileBlockStmtWithout(ctx *blockCtx, body *ast.BlockStmt) {
 }
 
 func compileNewBlock(ctx *blockCtx, block *ast.BlockStmt) {
-	ctx.out.DefineBlock()
 	compileBlockStmtWith(ctx, block)
-	ctx.out.EndBlock()
 }
 
 func compileBodyWith(ctx *blockCtx, body []ast.Stmt) {
@@ -85,6 +87,10 @@ func compileStmt(ctx *blockCtx, stmt ast.Stmt) {
 		compileDeclStmt(ctx, v)
 	case *ast.SendStmt:
 		compileSendStmt(ctx, v)
+	case *ast.TypeSwitchStmt:
+		compileTypeSwitchStmt(ctx, v)
+	case *ast.SelectStmt:
+		compileSelectStmt(ctx, v)
 	case *ast.EmptyStmt:
 		// do nothing
 	default:
@@ -356,6 +362,304 @@ func compileDeferStmt(ctx *blockCtx, v *ast.DeferStmt) {
 	compileCallExpr(ctx, v.Call, callByDefer)()
 }
 
+func unusedIdent(ctx *blockCtx, ident string) string {
+	name := ident
+	var ok bool
+	var i int
+	for {
+		_, ok = ctx.find(name)
+		if !ok {
+			break
+		}
+		name = ident + "_" + strconv.Itoa(i)
+		i++
+	}
+	return name
+}
+
+func isNilExpr(expr ast.Expr) bool {
+	if ident, ok := expr.(*ast.Ident); ok && ident.Name == "nil" {
+		return true
+	}
+	return false
+}
+
+func buildTypeSwitchStmtDefault(ctx *blockCtx, c *ast.CaseClause, vExpr, xExpr ast.Expr, hasValue bool) ast.Stmt {
+	if hasValue {
+		stms := []ast.Stmt{
+			&ast.AssignStmt{
+				Lhs: []ast.Expr{vExpr},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{xExpr},
+			},
+			&ast.AssignStmt{
+				Lhs: []ast.Expr{ast.NewIdent("_")},
+				Tok: token.ASSIGN,
+				Rhs: []ast.Expr{vExpr},
+			},
+		}
+		return &ast.BlockStmt{
+			List: append(stms, &ast.BlockStmt{List: c.Body}),
+		}
+	} else {
+		return &ast.BlockStmt{
+			List: c.Body,
+		}
+	}
+}
+
+func buildTypeSwitchStmtCaseStmt(ctx *blockCtx, c *ast.CaseClause, body *ast.BlockStmt, vExpr, xExpr ast.Expr, hasValue bool) *ast.IfStmt {
+	vCond := ast.NewIdent(unusedIdent(ctx, "ok"))
+	if isNilExpr(c.List[0]) {
+		if hasValue {
+			return &ast.IfStmt{
+				If: c.Pos(),
+				Init: &ast.AssignStmt{
+					Lhs: []ast.Expr{
+						vExpr,
+					},
+					Tok: token.DEFINE,
+					Rhs: []ast.Expr{
+						xExpr,
+					},
+				},
+				Cond: &ast.BinaryExpr{
+					X:  vExpr,
+					Op: token.EQL,
+					Y:  c.List[0],
+				},
+				Body: body,
+			}
+		} else {
+			return &ast.IfStmt{
+				If: c.Pos(),
+				Cond: &ast.BinaryExpr{
+					X:  xExpr,
+					Op: token.EQL,
+					Y:  c.List[0],
+				},
+				Body: body,
+			}
+		}
+	} else {
+		return &ast.IfStmt{
+			If: c.Pos(),
+			Init: &ast.AssignStmt{
+				Lhs: []ast.Expr{
+					vExpr,
+					vCond,
+				},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{
+					&ast.TypeAssertExpr{
+						X:    xExpr,
+						Type: c.List[0],
+					},
+				},
+			},
+			Cond: vCond,
+			Body: body,
+		}
+	}
+}
+
+func buildTypeSwitchStmtCaseListStmt(ctx *blockCtx, c *ast.CaseClause, body *ast.BlockStmt, vExpr, xExpr ast.Expr, hasValue bool) *ast.IfStmt {
+	cond := ast.NewIdent("ok")
+	var stmts []ast.Stmt
+	for _, expr := range c.List {
+		if isNilExpr(expr) {
+			stmts = append(stmts, &ast.IfStmt{
+				Cond: &ast.BinaryExpr{
+					X:  xExpr,
+					Op: token.EQL,
+					Y:  expr,
+				},
+				Body: &ast.BlockStmt{
+					List: []ast.Stmt{
+						&ast.ReturnStmt{
+							Results: []ast.Expr{ast.NewIdent("true")},
+						},
+					},
+				},
+			})
+		} else {
+			stmts = append(stmts, &ast.IfStmt{
+				Init: &ast.AssignStmt{
+					Lhs: []ast.Expr{
+						ast.NewIdent("_"),
+						cond,
+					},
+					Tok: token.ASSIGN,
+					Rhs: []ast.Expr{
+						&ast.TypeAssertExpr{
+							X:    xExpr,
+							Type: expr,
+						},
+					},
+				},
+				Cond: cond,
+				Body: &ast.BlockStmt{
+					List: []ast.Stmt{
+						&ast.ReturnStmt{},
+					},
+				},
+			})
+		}
+	}
+	funLit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params: &ast.FieldList{},
+			Results: &ast.FieldList{
+				List: []*ast.Field{
+					&ast.Field{
+						Names: []*ast.Ident{cond},
+						Type:  ast.NewIdent("bool"),
+					},
+				},
+			},
+		},
+		Body: &ast.BlockStmt{
+			List: append(stmts, &ast.ReturnStmt{}),
+		},
+	}
+	ifstmt := &ast.IfStmt{
+		If: c.Pos(),
+		Cond: &ast.CallExpr{
+			Fun: funLit,
+		},
+		Body: body,
+	}
+	if hasValue {
+		ifstmt.Init = &ast.AssignStmt{
+			Lhs: []ast.Expr{
+				vExpr,
+			},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{
+				xExpr,
+			},
+		}
+	}
+	return ifstmt
+}
+
+func buildTypeSwitchStmtCase(ctx *blockCtx, c *ast.CaseClause, vExpr, xExpr ast.Expr, hasValue bool) *ast.IfStmt {
+	var body *ast.BlockStmt
+	if hasValue {
+		stmts := []ast.Stmt{
+			&ast.AssignStmt{
+				Lhs: []ast.Expr{ast.NewIdent("_")},
+				Tok: token.ASSIGN,
+				Rhs: []ast.Expr{vExpr},
+			},
+		}
+		body = &ast.BlockStmt{
+			List: append(stmts, &ast.BlockStmt{List: c.Body}),
+		}
+	} else {
+		body = &ast.BlockStmt{
+			List: []ast.Stmt{&ast.BlockStmt{List: c.Body}},
+		}
+	}
+	if len(c.List) > 1 {
+		return buildTypeSwitchStmtCaseListStmt(ctx, c, body, vExpr, xExpr, hasValue)
+	} else {
+		return buildTypeSwitchStmtCaseStmt(ctx, c, body, vExpr, xExpr, hasValue)
+	}
+}
+
+func compileTypeSwitchStmt(ctx *blockCtx, v *ast.TypeSwitchStmt) {
+	ctx.out.DefineBlock()
+	defer ctx.out.EndBlock()
+	if v.Init != nil {
+		compileStmt(ctx, v.Init)
+	}
+	if len(v.Body.List) == 0 {
+		return
+	}
+	uExpr := ast.NewIdent("_")
+	var xInitExpr ast.Expr
+	var vExpr ast.Expr
+	var xExpr ast.Expr
+	var vName string
+	var hasValue bool
+	switch assign := v.Assign.(type) {
+	case *ast.AssignStmt:
+		hasValue = true
+		vExpr = assign.Lhs[0]
+		vName = vExpr.(*ast.Ident).Name
+		xInitExpr = assign.Rhs[0].(*ast.TypeAssertExpr).X
+	case *ast.ExprStmt:
+		vExpr = uExpr
+		xInitExpr = assign.X.(*ast.TypeAssertExpr).X
+	}
+	compileExpr(ctx, xInitExpr)
+	xtyp := ctx.infer.Pop().(iValue).Type()
+	xExpr = ast.NewIdent(unusedIdent(ctx, "_gop_"+vName))
+	vinit := &ast.AssignStmt{
+		Lhs: []ast.Expr{xExpr},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{xInitExpr},
+	}
+	vused := &ast.AssignStmt{
+		Lhs: []ast.Expr{uExpr},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{xExpr},
+	}
+	compileStmt(ctx, vinit)
+	compileStmt(ctx, vused)
+	var ifStmt *ast.IfStmt
+	var lastIfStmt *ast.IfStmt
+	var defaultStmt ast.Stmt
+	dupcheck := make(map[reflect.Type]bool)
+	for _, item := range v.Body.List {
+		c, _ := item.(*ast.CaseClause)
+		if c.List == nil {
+			if defaultStmt != nil {
+				log.Panicf("multiple defaults in switch")
+			}
+			defaultStmt = buildTypeSwitchStmtDefault(ctx, c, vExpr, xExpr, hasValue)
+			continue
+		}
+		for _, expr := range c.List {
+			if isNilExpr(expr) {
+				continue
+			}
+			typ := toType(ctx, expr).(reflect.Type)
+			if xtyp.NumMethod() != 0 && typ.Kind() != reflect.Interface {
+				if !typ.Implements(xtyp) {
+					log.Panicf("impossible type switch case: %v (type %v) cannot have dynamic type %v",
+						ctx.code(xInitExpr), xtyp, typ)
+				}
+			}
+			if _, ok := dupcheck[typ]; ok {
+				log.Panicf("duplicate case %v in type switch", typ)
+			}
+			dupcheck[typ] = true
+		}
+		stmt := buildTypeSwitchStmtCase(ctx, c, vExpr, xExpr, hasValue)
+		if ifStmt == nil {
+			ifStmt = stmt
+		}
+		if lastIfStmt != nil {
+			lastIfStmt.Else = stmt
+		}
+		lastIfStmt = stmt
+	}
+	if ifStmt == nil {
+		if defaultStmt != nil {
+			compileStmt(ctx, defaultStmt)
+		}
+		return
+	}
+	if defaultStmt != nil {
+		lastIfStmt.Else = &ast.BlockStmt{
+			List: []ast.Stmt{defaultStmt},
+		}
+	}
+	compileIfStmt(ctx, ifStmt)
+}
+
 func compileSwitchStmt(ctx *blockCtx, v *ast.SwitchStmt) {
 	if init := v.Init; init != nil {
 		v.Init = nil
@@ -455,7 +759,7 @@ func compileSwitchStmt(ctx *blockCtx, v *ast.SwitchStmt) {
 	}
 	if defaultBody != nil {
 		checkFinalFallthrough(defaultBody)
-		compileBodyWith(ctxSw, defaultBody)
+		compileBlockStmtWith(ctxSw, &ast.BlockStmt{List: defaultBody})
 		if hasCaseClause {
 			out.Jmp(done)
 		}
@@ -484,11 +788,11 @@ func compileCaseClause(c *ast.CaseClause, ctxSw *blockCtx, done exec.Label, next
 		fallNext = ok && bs.Tok == token.FALLTHROUGH
 	}
 	if fallNext {
-		compileBodyWith(ctxSw, c.Body[0:len(c.Body)-1])
+		compileBlockStmtWith(ctxSw, &ast.BlockStmt{List: c.Body[0 : len(c.Body)-1]})
 		withoutCheck = ctxSw.NewLabel("")
 		ctxSw.out.Jmp(withoutCheck)
 	} else {
-		compileBodyWith(ctxSw, c.Body)
+		compileBlockStmtWith(ctxSw, &ast.BlockStmt{List: c.Body})
 		ctxSw.out.Jmp(done)
 	}
 	ctxSw.out.Label(next)
@@ -622,8 +926,13 @@ func compileAssignStmt(ctx *blockCtx, expr *ast.AssignStmt) {
 	}
 	if len(expr.Rhs) == 1 {
 		rhsExpr := expr.Rhs[0]
-		if ie, ok := rhsExpr.(*ast.IndexExpr); ok && len(expr.Lhs) == 2 {
-			rhsExpr = &ast.TwoValueIndexExpr{IndexExpr: ie}
+		if len(expr.Lhs) == 2 {
+			switch ie := rhsExpr.(type) {
+			case *ast.IndexExpr:
+				rhsExpr = &ast.TwoValueIndexExpr{IndexExpr: ie}
+			case *ast.TypeAssertExpr:
+				rhsExpr = &ast.TwoValueTypeAssertExpr{TypeAssertExpr: ie}
+			}
 		}
 		compileExpr(ctx, rhsExpr)()
 		v := ctx.infer.Get(-1).(iValue)
@@ -657,6 +966,142 @@ func compileAssignStmt(ctx *blockCtx, expr *ast.AssignStmt) {
 	if ctx.underscore == count && expr.Tok == token.DEFINE {
 		log.Panicln("no new variables on left side of :=")
 	}
+}
+
+func compileSelectStmt(ctx *blockCtx, v *ast.SelectStmt) {
+	stmt := &ast.SwitchStmt{Body: &ast.BlockStmt{}}
+	var args []ast.Expr
+	var index int
+	var recvUsed bool
+	for _, item := range v.Body.List {
+		c, ok := item.(*ast.CommClause)
+		if !ok {
+			log.Panicln("compile SelectStmt failed: case clause expected.")
+		}
+		body := c.Body
+		switch expr := c.Comm.(type) {
+		case *ast.SendStmt:
+			compileExpr(ctx, expr.Chan)
+			compileExpr(ctx, expr.Value)
+			x := ctx.infer.Get(-2).(iValue)
+			y := ctx.infer.Get(-1).(iValue)
+			ctx.infer.PopN(2)
+			// Chan <- Send
+			// <- Chan
+			if x.Kind() == reflect.Chan {
+				if y.Kind() == reflect.Chan {
+					log.Panicf("cannot use %v (type %v) as type %v in send", ctx.code(expr.Value), y.Type(), x.Type().Elem())
+				}
+				args = append(args,
+					&ast.BasicLit{Kind: token.INT, Value: "1"},
+					expr.Chan,
+					expr.Value,
+				)
+			} else if y.Kind() == reflect.Chan {
+				args = append(args,
+					&ast.BasicLit{Kind: token.INT, Value: "2"},
+					expr.Value,
+					ast.NewIdent("nil"),
+				)
+				set := &ast.AssignStmt{
+					TokPos: expr.Arrow,
+					Lhs:    []ast.Expr{expr.Chan},
+					Tok:    token.ASSIGN,
+					Rhs: []ast.Expr{&ast.TypeAssertExpr{
+						X:    ast.NewIdent("_gop_recv"),
+						Type: astutil.Type(y.Type().Elem()),
+					}},
+				}
+				body = append([]ast.Stmt{set}, body...)
+				recvUsed = true
+			} else {
+				log.Panicf("invalid operation: %v (send to non-chan type %v)", ctx.code(expr), x.Type())
+			}
+		case *ast.AssignStmt:
+			x, ok := expr.Rhs[0].(*ast.UnaryExpr)
+			if !ok {
+				log.Panicln("select case must be receive, send or assign recv")
+			}
+			args = append(args,
+				&ast.BasicLit{Kind: token.INT, Value: "2"},
+				x.X,
+				ast.NewIdent("nil"),
+			)
+			compileExpr(ctx, x.X)
+			ix := ctx.infer.Pop().(iValue)
+			if ix.Type().Kind() != reflect.Chan {
+				log.Panicf("invalid operation: %v (receive from non-chan type %v)", ctx.code(x), ix.Type())
+			}
+			set := &ast.AssignStmt{
+				TokPos: expr.TokPos,
+				Lhs:    expr.Lhs,
+				Tok:    expr.Tok,
+				Rhs: []ast.Expr{&ast.TypeAssertExpr{
+					X:    ast.NewIdent("_gop_recv"),
+					Type: astutil.Type(ix.Type().Elem()),
+				}},
+			}
+			body = append([]ast.Stmt{set}, body...)
+			recvUsed = true
+		case *ast.ExprStmt:
+			x, ok := expr.X.(*ast.UnaryExpr)
+			if !ok || x.Op != token.ARROW {
+				log.Panicln("select case must be receive, send or assign recv")
+			}
+			compileExpr(ctx, x.X)
+			ix := ctx.infer.Pop().(iValue)
+			if ix.Type().Kind() != reflect.Chan {
+				log.Panicf("invalid operation: %v (receive from non-chan type %v)", ctx.code(expr), ix.Type())
+			}
+			args = append(args,
+				&ast.BasicLit{Kind: token.INT, Value: "2"},
+				x.X,
+				ast.NewIdent("nil"),
+			)
+		case nil:
+			args = append(args,
+				&ast.BasicLit{Kind: token.INT, Value: "3"},
+				ast.NewIdent("nil"),
+				ast.NewIdent("nil"),
+			)
+		}
+		stmt.Body.List = append(stmt.Body.List,
+			&ast.CaseClause{
+				Case:  c.Case,
+				Colon: c.Colon,
+				List: []ast.Expr{&ast.BasicLit{
+					Kind:  token.INT,
+					Value: strconv.Itoa(index),
+				}},
+				Body: body,
+			},
+		)
+		index++
+	}
+	var recvExpr ast.Expr
+	if recvUsed {
+		recvExpr = ast.NewIdent("_gop_recv")
+	} else {
+		recvExpr = ast.NewIdent("_")
+	}
+	stmt.Init = &ast.AssignStmt{
+		Lhs: []ast.Expr{
+			&ast.Ident{v.Select, "_gop_chosen", nil},
+			recvExpr,
+		},
+		Tok:    token.DEFINE,
+		TokPos: v.Select,
+		Rhs: []ast.Expr{
+			&ast.CallExpr{
+				Fun:  ast.NewIdent("$select"),
+				Args: args,
+			},
+		},
+	}
+	stmt.Switch = v.Select
+	stmt.Tag = &ast.Ident{Name: "_gop_chosen"}
+
+	compileSwitchStmt(ctx, stmt)
 }
 
 // -----------------------------------------------------------------------------

@@ -68,6 +68,10 @@ func isNoExecCtxStmt(ctx *blockCtx, stmt ast.Stmt) bool {
 		return isNoExecForStmt(ctx, v)
 	case *ast.SwitchStmt:
 		return isNoExecCtxSwitchStmt(ctx, v)
+	case *ast.TypeSwitchStmt:
+		return isNoExecCtxTypeSwitchStmt(ctx, v)
+	case *ast.SelectStmt:
+		return isNoExecCtxSelectStmt(ctx, v)
 	case *ast.BlockStmt:
 		return isNoExecCtx(ctx, v)
 	case *ast.ReturnStmt:
@@ -126,6 +130,16 @@ func isNoExecCtxExpr(ctx *blockCtx, expr ast.Expr) bool {
 		return isNoExecCtxMapComprehensionExpr(ctx, v)
 	case *ast.StarExpr:
 		return isNoExecCtxStarExpr(ctx, v)
+	case *ast.TypeAssertExpr:
+		return isNoExecCtxExpr(ctx, v.X)
+	case *ast.InterfaceType:
+		return true
+	case *ast.ChanType:
+		return true
+	case *ast.MapType:
+		return true
+	case *ast.FuncType:
+		return true
 	case *ast.ArrayType:
 		return true
 	case *ast.Ellipsis:
@@ -291,6 +305,53 @@ func isNoExecCtxExprs(ctx *blockCtx, exprs []ast.Expr) bool {
 	for _, expr := range exprs {
 		if noExecCtx := isNoExecCtxExpr(ctx, expr); !noExecCtx {
 			return false
+		}
+	}
+	return true
+}
+
+func isNoExecCtxTypeSwitchStmt(ctx *blockCtx, v *ast.TypeSwitchStmt) bool {
+	ctxSw := ctx
+	if v.Assign != nil {
+		if noExecCtx := isNoExecCtxStmt(ctxSw, v.Assign); !noExecCtx {
+			return false
+		}
+	}
+	for _, item := range v.Body.List {
+		c, ok := item.(*ast.CaseClause)
+		if !ok {
+			log.Panicln("compile SwitchStmt failed: case clause expected.")
+		}
+		if noExecCtx := isNoExecCtxExprs(ctxSw, c.List); !noExecCtx {
+			return false
+		}
+		ctxBody := newBlockCtxWithFlag(ctxSw)
+		for _, stmt := range c.Body {
+			if noExecCtx := isNoExecCtxStmt(ctxBody, stmt); !noExecCtx {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isNoExecCtxSelectStmt(ctx *blockCtx, v *ast.SelectStmt) bool {
+	ctxSe := ctx
+	for _, item := range v.Body.List {
+		c, ok := item.(*ast.CommClause)
+		if !ok {
+			log.Panicln("compile SelectStmt failed: comm clause expected.")
+		}
+		if c.Comm != nil {
+			if noExecCtx := isNoExecCtxStmt(ctxSe, c.Comm); !noExecCtx {
+				return false
+			}
+		}
+		ctxBody := newBlockCtxWithFlag(ctxSe)
+		for _, stmt := range c.Body {
+			if noExecCtx := isNoExecCtxStmt(ctxBody, stmt); !noExecCtx {
+				return false
+			}
 		}
 	}
 	return true

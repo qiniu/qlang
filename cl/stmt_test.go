@@ -1850,3 +1850,180 @@ var testChannelConvClauses = map[string]testData{
 func TestChannelConvStmt(t *testing.T) {
 	testScripts(t, "TestSendStmt", testChannelConvClauses)
 }
+
+func TestTypeSwitchStmt(t *testing.T) {
+	cltest.Expect(t, `
+	func whatis(x interface{}) string {
+		switch x.(type) {
+		}
+		return "none"
+	}
+	println(whatis(100))
+	`, "none\n")
+	cltest.Expect(t, `
+	import "fmt"
+	func whatis(x interface{}) string {
+		switch xx := x.(type) {
+		default:
+			return fmt.Sprint("default ", xx)
+		case int, int8, int16, int32:
+			return fmt.Sprint("signed ", xx)
+		case int64:
+			return fmt.Sprint("signed64 ", int64(xx))
+		case uint, uint8, uint16, uint32:
+			return fmt.Sprint("unsigned ", xx)
+		case uint64:
+			return fmt.Sprint("unsigned64 ", uint64(xx))
+		case nil:
+			return fmt.Sprint("nil ", xx)
+		}
+		panic("not reached")
+	}
+	println(whatis(100))
+	println(whatis(int64(100)))
+	println(whatis("s"))
+	println(whatis(nil))
+	`, "signed 100\nsigned64 100\ndefault s\nnil <nil>\n")
+	cltest.Expect(t, `
+	import "fmt"
+	func whatis(x interface{}) string {
+		switch xx := x.(type) {
+		default:
+			return fmt.Sprint("default ", xx)
+		}
+		panic("not reached")
+	}
+	println(whatis(100))
+	`, "default 100\n")
+	cltest.Expect(t, `
+	import "fmt"
+	func whatis(x interface{}) string {
+		switch xx := x.(type) {
+		default:
+			return fmt.Sprint("default ", xx)
+		case int, nil:
+			return fmt.Sprint("int or nil ", xx)
+		}
+		panic("not reached")
+	}
+	println(whatis(100))
+	`, "int or nil 100\n")
+	cltest.Expect(t, `
+	import "fmt"
+	func whatis(x interface{}) string {
+		var ok bool
+		_ = ok
+		switch xx := x; xx.(type) {
+		default:
+			return fmt.Sprint("default ", xx)
+		case int:
+			return fmt.Sprint("int ", xx)
+		}
+		panic("not reached")
+	}
+	println(whatis(100))
+	`, "int 100\n")
+}
+
+func TestTypeSwitchStmtMultipeDefaults(t *testing.T) {
+	cltest.Expect(t, `
+	func whatis(x interface{}) string {
+		switch x.(type) {
+		default:
+			return "default"
+		default: 
+			return "default 2"
+		}
+		return ""
+	}
+	whatis(100)	
+	`, "", "multiple defaults in switch")
+}
+
+func TestTypeSwitchImpossible(t *testing.T) {
+	cltest.Expect(t, `
+	import "bytes"
+	type Stringer interface {
+		String() string
+	}
+	func test(v Stringer) {
+		switch v.(type) {
+		case int:
+			println(v)
+		}
+	}
+	buf := bytes.NewBuffer([]byte("hello"))
+	test(buf)
+	`, "", "impossible type switch case: v (type main.Stringer) cannot have dynamic type int")
+}
+
+func TestTypeSwitchDuplicate(t *testing.T) {
+	cltest.Expect(t, `
+	func whatis(x interface{}) string {
+		switch x.(type) {
+		case int:
+			return "int"
+		case int: // ERROR "duplicate"
+			return "int8"
+		}
+		return ""
+	}
+	whatis(100)
+	`, "", "duplicate case int in type switch")
+	cltest.Expect(t, `
+	import "io"
+	func whatis(x interface{}) string {
+		switch x.(type) {
+		case io.Reader:
+			return "Reader1"
+		case io.Reader: // ERROR "duplicate"
+			return "Reader2"
+		}
+		return ""
+	}
+	whatis(nil)
+	`, "", "duplicate case io.Reader in type switch")
+	cltest.Expect(t, `
+	import "io"
+	func whatis(x interface{}) string {
+		switch x.(type) {
+		case interface {
+			r()
+			w()
+		}:
+			return "rw"
+		case interface {	// ERROR "duplicate"
+			w()
+			r()
+		}:
+			return "wr"
+		}
+		return ""
+	}
+	whatis(nil)
+	`, "", "duplicate case interface { r(); w() } in type switch")
+	cltest.Expect(t, `
+	type T interface {
+		Test()
+	}
+	type Stringer interface {
+		String() string
+	}
+	func whatis(x interface{}) string {
+		switch x.(type) {
+		case interface {
+			T
+			Stringer
+		}:
+			return "ts1"
+		case interface {	// ERROR "duplicate"
+			Test()
+			String() string
+		}:
+			return "ts2"
+		}
+		return ""
+	}
+	whatis(nil)
+	`, "", "duplicate case interface { String() string; Test() } in type switch")
+}
